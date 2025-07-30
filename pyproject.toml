@@ -1,0 +1,63 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "meta-mcp"
+version = "0.1.0"
+description = "A FastMCP-based server for discovering, installing, and managing other MCP servers"
+authors = [
+    {name = "Meta MCP Team", email = "team@metamcp.dev"},
+]
+dependencies = [
+    "mcp>=1.0.0",
+    "aiohttp>=3.9.0",
+    "pydantic>=2.0.0",
+    "click>=8.0.0",
+    "httpx>=0.24.0",
+    "GitPython>=3.1.0",
+    "PyYAML>=6.0",
+    "jinja2>=3.1.0",
+    "packaging>=21.0",
+    "semantic-version>=2.10.0",
+]
+requires-python = ">=3.10"
+readme = "README.md"
+license = {text = "MIT"}
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=22.0.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+meta-mcp-server = "meta_mcp.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/meta_mcp"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/README.md",
+    "/LICENSE",
+]
+
+[tool.black]
+line-length = 88
+target-version = ['py310']
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+select = ["E4", "E7", "E9", "F", "W"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
