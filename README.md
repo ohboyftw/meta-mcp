@@ -1,6 +1,6 @@
 # Meta MCP Server
 
-A FastMCP-based server for discovering, installing, and managing other MCP servers. This implementation uses the proven FastMCP pattern that avoids CallToolResult iteration issues.
+A FastMCP-based server for discovering, installing, and managing other MCP servers. 
 
 ## Features
 
@@ -26,7 +26,7 @@ meta-mcp-server
 
 ## Architecture
 
-This server uses the FastMCP pattern similar to Serena, where:
+This server uses the FastMCP pattern:
 - Tools return simple strings via `apply() -> str` methods
 - FastMCP framework handles all CallToolResult wrapping automatically
 - No direct CallToolResult object creation to avoid iteration issues
