@@ -123,3 +123,66 @@ class MCPServerHealth(BaseModel):
     response_time_ms: Optional[int] = Field(None, description="Response time in milliseconds")
     error_message: Optional[str] = Field(None, description="Error message if unhealthy")
     last_checked: datetime = Field(default_factory=datetime.now, description="Last health check time")
+
+
+class ErrorCategory(str, Enum):
+    """Categories of installation errors."""
+    PERMISSION_ERROR = "permission_error"
+    NETWORK_ERROR = "network_error"
+    DEPENDENCY_MISSING = "dependency_missing"
+    PACKAGE_NOT_FOUND = "package_not_found"
+    ENVIRONMENT_ISSUE = "environment_issue"
+    SYSTEM_ERROR = "system_error"
+    COMMAND_ERROR = "command_error"
+    UNKNOWN = "unknown"
+
+
+class InstallationError(BaseModel):
+    """Detailed information about an installation error."""
+    category: ErrorCategory = Field(description="Error category")
+    message: str = Field(description="Error message")
+    details: Dict[str, str] = Field(default_factory=dict, description="Additional error details")
+    suggestion: Optional[str] = Field(None, description="Suggested fix for the error")
+
+
+class InstallationLogEntry(BaseModel):
+    """Log entry for a single installation attempt."""
+    attempt_id: int = Field(description="Attempt number within session")
+    command: str = Field(description="Command that was executed")
+    attempt_type: str = Field(description="Type of attempt (primary, fallback, readme)")
+    started_at: datetime = Field(description="When the attempt started")
+    ended_at: Optional[datetime] = Field(None, description="When the attempt ended")
+    duration_seconds: Optional[float] = Field(None, description="How long the attempt took")
+    cwd: str = Field(description="Working directory for the command")
+    return_code: Optional[int] = Field(None, description="Command return code")
+    stdout: str = Field(default="", description="Standard output from command")
+    stderr: str = Field(default="", description="Standard error from command")
+    success: bool = Field(default=False, description="Whether the attempt succeeded")
+    error: Optional[InstallationError] = Field(None, description="Error details if failed")
+
+
+class InstallationSession(BaseModel):
+    """Complete session log for an installation attempt."""
+    session_id: str = Field(description="Unique session identifier")
+    server_name: str = Field(description="Name of server being installed")
+    option_name: str = Field(description="Installation option being used")
+    install_command: str = Field(description="Primary installation command")
+    started_at: datetime = Field(description="When the session started")
+    ended_at: Optional[datetime] = Field(None, description="When the session ended")
+    duration_seconds: Optional[float] = Field(None, description="Total session duration")
+    success: Optional[bool] = Field(None, description="Overall success of installation")
+    final_message: Optional[str] = Field(None, description="Final result message")
+    system_info: Dict[str, str] = Field(default_factory=dict, description="System information")
+    attempts: List[InstallationLogEntry] = Field(default_factory=list, description="All installation attempts")
+
+
+class InstallationStats(BaseModel):
+    """Statistics about installation attempts."""
+    total_attempts: int = Field(description="Total number of installation attempts")
+    successful_installs: int = Field(description="Number of successful installations")
+    failed_installs: int = Field(description="Number of failed installations")
+    success_rate: float = Field(description="Success rate as percentage")
+    error_categories: Dict[str, int] = Field(default_factory=dict, description="Count by error category")
+    most_problematic_servers: List[str] = Field(default_factory=list, description="Servers with most failures")
+    average_install_time: Optional[float] = Field(None, description="Average installation time in seconds")
+    last_updated: datetime = Field(default_factory=datetime.now, description="When stats were last updated")

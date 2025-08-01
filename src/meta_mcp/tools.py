@@ -418,3 +418,344 @@ class RefreshServerCacheTool(Tool):
         content += f"**Net change:** {after_count - before_count:+d} servers"
         
         return content
+
+
+class GetInstallationStatsTool(Tool):
+    """Get comprehensive installation statistics and error analysis."""
+    
+    def __init__(self):
+        super().__init__()
+        self.installer = MCPInstaller()
+    
+    def apply(self, format_type: str = "summary") -> str:
+        """
+        Get comprehensive installation statistics and error analysis.
+        
+        Args:
+            format_type: Format type - "summary", "detailed", or "errors_only"
+            
+        Returns:
+            Installation statistics and analysis.
+        """
+        # Run stats gathering asynchronously
+        stats = run_async_safely(self.installer.get_installation_stats())
+        
+        if stats.get("error"):
+            return f"❌ Failed to get installation stats: {stats['error']}"
+        
+        content = "# Installation Statistics\n\n"
+        
+        # Basic stats
+        total_attempts = stats.get('total_attempts', 0)
+        successful_installs = stats.get('successful_installs', 0)
+        failed_installs = stats.get('failed_installs', 0)
+        
+        content += f"**Total Attempts:** {total_attempts}\n"
+        content += f"**Successful Installs:** {successful_installs}\n"
+        content += f"**Failed Installs:** {failed_installs}\n"
+        
+        if total_attempts > 0:
+            success_rate = (successful_installs / total_attempts) * 100
+            content += f"**Success Rate:** {success_rate:.1f}%\n"
+        
+        # Error categories
+        error_categories = stats.get('error_categories', {})
+        if error_categories and format_type in ["summary", "detailed", "errors_only"]:
+            content += "\n## Error Categories\n\n"
+            for category, count in sorted(error_categories.items(), key=lambda x: x[1], reverse=True):
+                content += f"- **{category.replace('_', ' ').title()}:** {count} occurrences\n"
+        
+        # Recent attempts (only for detailed format)
+        if format_type == "detailed":
+            recent = stats.get('recent_attempts', [])[:10]
+            if recent:
+                content += "\n## Recent Installation Attempts\n\n"
+                for attempt in recent:
+                    status = "✅" if attempt.get('success') else "❌"
+                    duration = f"{attempt.get('duration', 0):.1f}s" if attempt.get('duration') else "N/A"
+                    timestamp = attempt.get('timestamp', 'Unknown')
+                    content += f"{status} **{attempt.get('server', 'Unknown')}** ({duration}) - {timestamp}\n"
+        
+        return content
+
+
+class GetSessionDetailsTool(Tool):
+    """Get detailed information about a specific installation session."""
+    
+    def __init__(self):
+        super().__init__()
+        self.installer = MCPInstaller()
+    
+    def apply(self, session_id: str) -> str:
+        """
+        Get detailed information about a specific installation session.
+        
+        Args:
+            session_id: Unique identifier for the installation session
+            
+        Returns:
+            Detailed session information including all attempts and errors.
+        """
+        # Run session details gathering asynchronously
+        session_data = run_async_safely(self.installer.get_session_details(session_id))
+        
+        if not session_data:
+            return f"❌ Session '{session_id}' not found. Use GetInstallationStatsTool to see recent sessions."
+        
+        content = f"# Installation Session: {session_id}\n\n"
+        
+        # Basic session info
+        content += f"**Server:** {session_data.get('server_name')}-{session_data.get('option_name')}\n"
+        content += f"**Command:** `{session_data.get('install_command')}`\n"
+        content += f"**Started:** {session_data.get('started_at')}\n"
+        content += f"**Duration:** {session_data.get('duration_seconds', 0):.1f}s\n"
+        content += f"**Success:** {'✅ Yes' if session_data.get('success') else '❌ No'}\n"
+        content += f"**Final Message:** {session_data.get('final_message')}\n"
+        
+        # System info
+        system_info = session_data.get('system_info', {})
+        if system_info:
+            content += f"\n## System Information\n\n"
+            content += f"**Platform:** {system_info.get('platform', 'Unknown')}\n"
+            content += f"**Python Version:** {system_info.get('python_version', 'Unknown')}\n"
+            content += f"**Architecture:** {system_info.get('architecture', 'Unknown')}\n"
+        
+        # Installation attempts
+        attempts = session_data.get('attempts', [])
+        if attempts:
+            content += f"\n## Installation Attempts ({len(attempts)})\n\n"
+            for i, attempt in enumerate(attempts, 1):
+                status = "✅" if attempt.get('success') else "❌"
+                attempt_type = attempt.get('attempt_type', 'unknown')
+                duration = f"{attempt.get('duration_seconds', 0):.1f}s"
+                
+                content += f"### Attempt {i}: {status} {attempt_type.title()} ({duration})\n\n"
+                content += f"**Command:** `{attempt.get('command')}`\n"
+                content += f"**Return Code:** {attempt.get('return_code')}\n"
+                
+                if not attempt.get('success') and attempt.get('error'):
+                    error = attempt['error']
+                    content += f"**Error Category:** {error.get('category')}\n"
+                    content += f"**Error Message:** {error.get('message')}\n"
+                    
+                    details = error.get('details', {})
+                    if details.get('suggestion'):
+                        content += f"**Suggested Fix:** {details['suggestion']}\n"
+                
+                # Show stdout/stderr if available (truncated)
+                stdout = attempt.get('stdout', '')
+                stderr = attempt.get('stderr', '')
+                
+                if stdout:
+                    content += f"\n**Output:** \n```\n{stdout[:500]}{'...' if len(stdout) > 500 else ''}\n```\n"
+                if stderr:
+                    content += f"\n**Error Output:** \n```\n{stderr[:500]}{'...' if len(stderr) > 500 else ''}\n```\n"
+                
+                content += "\n"
+        
+        return content
+
+
+class ExportInstallationLogsTool(Tool):
+    """Export installation logs for analysis or bug reporting."""
+    
+    def __init__(self):
+        super().__init__()
+        self.installer = MCPInstaller()
+    
+    def apply(self, output_path: Optional[str] = None) -> str:
+        """
+        Export installation logs for analysis or bug reporting.
+        
+        Args:
+            output_path: Optional path for the export file
+            
+        Returns:
+            Export result with file path.
+        """
+        try:
+            # Run export asynchronously
+            export_path = run_async_safely(self.installer.export_installation_logs(output_path))
+            
+            content = f"✅ Installation logs exported successfully!\n\n"
+            content += f"**Export File:** `{export_path}`\n\n"
+            content += "The export includes:\n"
+            content += "- Installation statistics\n"
+            content += "- Recent session details\n"
+            content += "- System information\n"
+            content += "- Error analysis\n\n"
+            content += "You can use this file for bug reports or detailed analysis."
+            
+            return content
+            
+        except Exception as e:
+            return f"❌ Failed to export installation logs: {str(e)}"
+
+
+class CleanupInstallationLogsTool(Tool):
+    """Clean up old installation logs to free up space."""
+    
+    def __init__(self):
+        super().__init__()
+        self.installer = MCPInstaller()
+    
+    def apply(self, days_to_keep: int = 30) -> str:
+        """
+        Clean up old installation logs to free up space.
+        
+        Args:
+            days_to_keep: Number of days of logs to keep (default: 30)
+            
+        Returns:
+            Cleanup result with number of files removed.
+        """
+        # Run cleanup asynchronously
+        cleaned_count = run_async_safely(self.installer.cleanup_old_logs(days_to_keep))
+        
+        content = f"✅ Cleanup completed!\n\n"
+        content += f"**Files removed:** {cleaned_count}\n"
+        content += f"**Retention period:** {days_to_keep} days\n\n"
+        
+        if cleaned_count > 0:
+            content += "Old installation logs have been removed to free up space."
+        else:
+            content += "No old logs found to clean up."
+        
+        return content
+
+
+class AnalyzeInstallationErrorsTool(Tool):
+    """Analyze installation errors and provide solutions."""
+    
+    def __init__(self):
+        super().__init__()
+        self.installer = MCPInstaller()
+    
+    def apply(self, error_category: Optional[str] = None) -> str:
+        """
+        Analyze installation errors and provide solutions.
+        
+        Args:
+            error_category: Focus on specific error category (optional)
+            
+        Returns:
+            Error analysis with solutions and recommendations.
+        """
+        # Run stats gathering asynchronously
+        stats = run_async_safely(self.installer.get_installation_stats())
+        
+        error_categories = stats.get('error_categories', {})
+        if not error_categories:
+            return "✅ No installation errors recorded yet."
+        
+        content = "# Installation Error Analysis\n\n"
+        
+        # Error solutions mapping
+        error_solutions = {
+            "permission_error": {
+                "description": "Insufficient permissions to execute installation commands",
+                "solutions": [
+                    "Try running with sudo (use carefully)",
+                    "Check file permissions in target directory",
+                    "Ensure your user has write access to installation paths",
+                    "For npm: Use 'npm config set prefix ~/.npm-global' to avoid permission issues"
+                ]
+            },
+            "network_error": {
+                "description": "Network connectivity issues during installation",
+                "solutions": [
+                    "Check your internet connection",
+                    "Try again in a few minutes",
+                    "Check if corporate firewall is blocking requests",
+                    "Use a VPN if in a restricted network",
+                    "Verify DNS resolution is working"
+                ]
+            },
+            "dependency_missing": {
+                "description": "Required dependencies are not installed",
+                "solutions": [
+                    "Install Node.js and npm from https://nodejs.org/",
+                    "Install uv/uvx: curl -LsSf https://astral.sh/uv/install.sh | sh",
+                    "Restart your terminal after installation",
+                    "Verify installation with: node --version && npm --version"
+                ]
+            },
+            "package_not_found": {
+                "description": "The requested package or repository does not exist",
+                "solutions": [
+                    "Verify the package name is correct",
+                    "Check if the repository URL is valid",
+                    "Try alternative installation options",
+                    "Search for similar packages with search_mcp_servers"
+                ]
+            },
+            "environment_issue": {
+                "description": "Environment configuration problems",
+                "solutions": [
+                    "Remove package-lock.json or yarn.lock files",
+                    "Clear npm cache: npm cache clean --force",
+                    "Check environment variables are set correctly",
+                    "Ensure no conflicting global packages"
+                ]
+            },
+            "system_error": {
+                "description": "System-level errors (disk space, memory, etc.)",
+                "solutions": [
+                    "Check available disk space",
+                    "Free up memory if needed",
+                    "Check system permissions",
+                    "Restart if system resources are locked"
+                ]
+            },
+            "command_error": {
+                "description": "Command syntax or parameter errors",
+                "solutions": [
+                    "Verify command syntax is correct",
+                    "Check all required parameters are provided",
+                    "Try alternative installation methods",
+                    "Check for typos in server names"
+                ]
+            },
+            "unknown": {
+                "description": "Unclassified errors that need manual investigation",
+                "solutions": [
+                    "Check the full error output for specific details",
+                    "Try alternative installation options",
+                    "Export logs and report the issue",
+                    "Use GetSessionDetailsTool for more information"
+                ]
+            }
+        }
+        
+        # Filter by category if specified
+        categories_to_show = [error_category] if error_category and error_category in error_categories else error_categories.keys()
+        
+        for category in sorted(categories_to_show, key=lambda x: error_categories.get(x, 0), reverse=True):
+            count = error_categories.get(category, 0)
+            if count == 0:
+                continue
+                
+            solution_info = error_solutions.get(category, {})
+            
+            content += f"## {category.replace('_', ' ').title()} ({count} occurrences)\n\n"
+            
+            if solution_info.get('description'):
+                content += f"**Description:** {solution_info['description']}\n\n"
+            
+            if solution_info.get('solutions'):
+                content += "**Solutions:**\n"
+                for i, solution in enumerate(solution_info['solutions'], 1):
+                    content += f"{i}. {solution}\n"
+                content += "\n"
+            else:
+                content += "**Solution:** Check specific error details for guidance.\n\n"
+        
+        # General recommendations
+        content += "## General Recommendations\n\n"
+        content += "1. **Check Prerequisites:** Ensure Node.js/npm and uv/uvx are installed\n"
+        content += "2. **Network Issues:** Verify internet connectivity and firewall settings\n"
+        content += "3. **Permission Problems:** Consider using user-level package managers\n"
+        content += "4. **Export Logs:** Use ExportInstallationLogsTool for detailed debugging\n"
+        content += "5. **Try Alternatives:** Most servers have multiple installation options\n"
+        
+        return content

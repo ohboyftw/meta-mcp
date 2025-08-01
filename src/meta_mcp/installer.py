@@ -16,6 +16,7 @@ from typing import Dict, List, Optional, Tuple
 import httpx
 
 from .config import MCPConfig
+from .logging_manager import InstallationLogManager
 from .models import (
     MCPInstallationRequest,
     MCPInstallationResult,
@@ -35,6 +36,9 @@ class MCPInstaller:
         self.config = MCPConfig()
         self.installation_log = Path.home() / ".mcp-manager" / "installations.json"
         self.installation_log.parent.mkdir(exist_ok=True)
+        
+        # Enhanced logging
+        self.log_manager = InstallationLogManager()
         
         # Server definitions (self-contained)
         self.server_definitions = self._get_server_definitions()
@@ -90,6 +94,9 @@ class MCPInstaller:
 
         logger.info(f"Installing {server_name} with option {option_name}")
         
+        # Start logging session
+        session_id = self.log_manager.start_session(server_name, option_name, install_command)
+        
         try:
             success, message = await self._execute_installation_with_fallback(install_command, server_name, option_name)
             
@@ -121,6 +128,9 @@ class MCPInstaller:
                 else:
                     config_message = "Manual configuration update required."
                 
+                # End logging session with success
+                self.log_manager.end_session(True, f"Successfully installed {server_name}. {config_message}")
+                
                 return MCPInstallationResult(
                     success=True,
                     server_name=server_name,
@@ -130,6 +140,10 @@ class MCPInstaller:
                 )
             else:
                 parsed_message = self._parse_npm_error(message) if (install_command.startswith("npm") or install_command.startswith("npx")) else message
+                
+                # End logging session with failure
+                self.log_manager.end_session(False, f"Installation failed: {parsed_message}")
+                
                 return MCPInstallationResult(
                     success=False,
                     server_name=server_name,
@@ -140,6 +154,10 @@ class MCPInstaller:
                 
         except Exception as e:
             logger.error(f"Installation failed: {e}")
+            
+            # End logging session with exception
+            self.log_manager.end_session(False, f"Installation error: {str(e)}")
+            
             return MCPInstallationResult(
                 success=False,
                 server_name=server_name,
@@ -204,7 +222,7 @@ class MCPInstaller:
                     "description": "Semantic code understanding and IDE-like editing",
                     "options": {
                         "official": {
-                            "install": "uvx --from git+https://github.com/oraios/serena serena-mcp-server",
+                            "install": "uvx --from git+https://github.com/oraios/serena serena start-mcp-server --context ide-assistant --project $(pwd)",
                             "config_name": "serena",
                             "env_vars": []
                         }
@@ -343,7 +361,7 @@ class MCPInstaller:
         return None
 
     async def _execute_installation(self, install_command: str) -> Tuple[bool, str]:
-        """Execute the installation command."""
+        """Legacy method - kept for backward compatibility. Use log_manager.log_installation_attempt instead."""
         try:
             # Split command into parts
             cmd_parts = install_command.split()
@@ -367,9 +385,11 @@ class MCPInstaller:
             return False, str(e)
 
     async def _execute_installation_with_fallback(self, install_command: str, server_name: str, option_name: str) -> Tuple[bool, str]:
-        """Execute installation with fallback mechanisms."""
+        """Execute installation with fallback mechanisms using enhanced logging."""
         # Try primary installation first
-        success, message = await self._execute_installation(install_command)
+        success, message, log_data = await self.log_manager.log_installation_attempt(
+            install_command, "primary"
+        )
         
         if success:
             return True, message
@@ -383,7 +403,9 @@ class MCPInstaller:
             logger.info(f"Trying fallback method {i}/{len(fallback_commands)}: {fallback_cmd}")
             
             try:
-                success, fallback_message = await self._execute_installation(fallback_cmd)
+                success, fallback_message, fallback_log_data = await self.log_manager.log_installation_attempt(
+                    fallback_cmd, f"fallback_{i}"
+                )
                 if success:
                     logger.info(f"Fallback method {i} succeeded for {server_name}")
                     return True, f"Installation succeeded using fallback method {i}: {fallback_message}"
@@ -397,7 +419,9 @@ class MCPInstaller:
         if readme_command:
             logger.info(f"Trying README-based installation: {readme_command}")
             try:
-                success, readme_message = await self._execute_installation(readme_command)
+                success, readme_message, readme_log_data = await self.log_manager.log_installation_attempt(
+                    readme_command, "readme_based"
+                )
                 if success:
                     logger.info(f"README-based installation succeeded for {server_name}")
                     return True, f"Installation succeeded using README instructions: {readme_message}"
@@ -501,15 +525,20 @@ class MCPInstaller:
             if not install_info:
                 return f"Server {server_name} is not installed"
             
-            # Re-run the installation command to update
-            success, message = await self._execute_installation(install_info["install_command"])
+            # Re-run the installation command to update with logging
+            session_id = self.log_manager.start_session(server_name, "update", install_info["install_command"])
+            success, message, log_data = await self.log_manager.log_installation_attempt(
+                install_info["install_command"], "update"
+            )
             
             if success:
                 # Update the installation timestamp
                 install_info["updated_at"] = datetime.now().isoformat()
                 self._save_installation_log()
+                self.log_manager.end_session(True, f"Successfully updated {server_name}")
                 return f"Successfully updated {server_name}"
             else:
+                self.log_manager.end_session(False, f"Failed to update {server_name}: {message}")
                 return f"Failed to update {server_name}: {message}"
                 
         except Exception as e:
@@ -867,6 +896,52 @@ class MCPInstaller:
                 continue
         
         return None
+
+    async def get_installation_stats(self) -> Dict[str, Any]:
+        """Get comprehensive installation statistics and analysis."""
+        return self.log_manager.get_installation_stats()
+
+    async def get_session_details(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get detailed information about a specific installation session."""
+        return self.log_manager.get_session_details(session_id)
+
+    async def cleanup_old_logs(self, days_to_keep: int = 30) -> int:
+        """Clean up old installation logs. Returns number of files cleaned."""
+        return self.log_manager.cleanup_old_logs(days_to_keep)
+
+    async def export_installation_logs(self, output_path: Optional[str] = None) -> str:
+        """Export installation logs for analysis or bug reporting."""
+        try:
+            if not output_path:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                output_path = f"mcp_installation_logs_{timestamp}.json"
+            
+            stats = await self.get_installation_stats()
+            
+            # Get recent session details
+            recent_sessions = []
+            for attempt in stats.get("recent_attempts", [])[:10]:  # Last 10 sessions
+                if "session_id" in attempt:
+                    session_details = await self.get_session_details(attempt["session_id"])
+                    if session_details:
+                        recent_sessions.append(session_details)
+            
+            export_data = {
+                "export_timestamp": datetime.now().isoformat(),
+                "stats": stats,
+                "recent_sessions": recent_sessions,
+                "system_info": self.log_manager._get_system_info()
+            }
+            
+            with open(output_path, 'w') as f:
+                json.dump(export_data, f, indent=2, default=str)
+            
+            logger.info(f"Installation logs exported to {output_path}")
+            return output_path
+            
+        except Exception as e:
+            logger.error(f"Failed to export installation logs: {e}")
+            raise
 
     async def _update_local_mcp_config(self, config_name: str, install_command: str, env_vars: Optional[Dict[str, str]]) -> bool:
         """Update .mcp.json in current working directory with user permission."""
