@@ -39,6 +39,7 @@ meta-mcp-server = "meta_mcp.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/meta_mcp"]
+include = ["src/meta_mcp/*.json"]
 
 [tool.hatch.build.targets.sdist]
 include = [

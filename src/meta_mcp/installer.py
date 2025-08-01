@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import os
+import platform
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +28,33 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def get_config_directory() -> Path:
+    """Get the appropriate config directory for the current platform."""
+    system = platform.system().lower()
+    
+    if system == "windows":
+        # Windows: Use APPDATA (roaming) or LOCALAPPDATA
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            return Path(appdata) / "meta-mcp"
+        # Fallback to LOCALAPPDATA
+        localappdata = os.environ.get("LOCALAPPDATA")
+        if localappdata:
+            return Path(localappdata) / "meta-mcp"
+        # Final fallback
+        return Path.home() / "AppData" / "Roaming" / "meta-mcp"
+    
+    elif system == "darwin":  # macOS
+        return Path.home() / "Library" / "Application Support" / "meta-mcp"
+    
+    else:  # Linux, WSL, other Unix-like systems
+        # Follow XDG Base Directory Specification
+        xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
+        if xdg_config_home:
+            return Path(xdg_config_home) / "meta-mcp"
+        return Path.home() / ".config" / "meta-mcp"
 
 
 class MCPInstaller:
@@ -167,168 +195,67 @@ class MCPInstaller:
             )
 
     def _get_server_definitions(self) -> Dict[str, Dict]:
-        """Get server definitions with installation options."""
-        return {
-            "orchestration": {
-                "zen-mcp": {
-                    "name": "Zen MCP Server",
-                    "description": "Multi-provider AI model routing and orchestration",
-                    "options": {
-                        "official": {
-                            "install": "uvx --from git+https://github.com/BeehiveInnovations/zen-mcp-server zen-mcp-server",
-                            "config_name": "zen-mcp",
-                            "env_vars": ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"]
-                        },
-                        "enhanced": {
-                            "install": "uvx --from git+https://github.com/199-mcp/mcp-zen zen-mcp-server",
-                            "config_name": "zen-mcp-enhanced",
-                            "env_vars": ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"]
-                        }
-                    }
-                }
-            },
-            "context": {
-                "context7": {
-                    "name": "Context7",
-                    "description": "Up-to-date code documentation and project context",
-                    "options": {
-                        "official": {
-                            "install": "npx -y @upstash/context7-mcp",
-                            "config_name": "context7",
-                            "env_vars": ["CONTEXT7_API_KEY"]
-                        }
-                    }
-                },
-                "perplexity": {
-                    "name": "Perplexity Search",
-                    "description": "Real-time web research and search capabilities",
-                    "options": {
-                        "official": {
-                            "install": "uvx --from git+https://github.com/ppl-ai/modelcontextprotocol perplexity-mcp",
-                            "config_name": "perplexity",
-                            "env_vars": ["PERPLEXITY_API_KEY"]
-                        },
-                        "enhanced": {
-                            "install": "uvx --from git+https://github.com/cyanheads/perplexity-mcp-server perplexity-mcp-server",
-                            "config_name": "perplexity-enhanced",
-                            "env_vars": ["PERPLEXITY_API_KEY"]
-                        }
-                    }
-                }
-            },
-            "coding": {
-                "serena": {
-                    "name": "Serena",
-                    "description": "Semantic code understanding and IDE-like editing",
-                    "options": {
-                        "official": {
-                            "install": "uvx --from git+https://github.com/oraios/serena serena start-mcp-server --context ide-assistant --project $(pwd)",
-                            "config_name": "serena",
-                            "env_vars": []
-                        }
-                    }
-                }
-            },
-            "search": {
-                "brave-search": {
-                    "name": "Brave Search",
-                    "description": "Privacy-focused web search with technical content",
-                    "options": {
-                        "official": {
-                            "install": "npx -y @modelcontextprotocol/server-brave-search",
-                            "config_name": "brave-search",
-                            "env_vars": ["BRAVE_API_KEY"]
-                        }
-                    }
-                }
-            },
-            "automation": {
-                "puppeteer": {
-                    "name": "Puppeteer Browser Automation",
-                    "description": "Browser automation and web scraping",
-                    "options": {
-                        "official": {
-                            "install": "npx -y @modelcontextprotocol/server-puppeteer",
-                            "config_name": "puppeteer",
-                            "env_vars": []
-                        },
-                        "enhanced": {
-                            "install": "uvx --from git+https://github.com/merajmehrabi/puppeteer-mcp-server puppeteer-mcp-server",
-                            "config_name": "puppeteer-enhanced",
-                            "env_vars": []
-                        }
-                    }
-                },
-                "firecrawl": {
-                    "name": "Firecrawl Web Scraping",
-                    "description": "Advanced web scraping with JavaScript rendering",
-                    "options": {
-                        "official": {
-                            "install": "npx -y firecrawl-mcp",
-                            "config_name": "firecrawl",
-                            "env_vars": ["FIRECRAWL_API_KEY"]
-                        }
-                    }
-                },
-                "desktop-commander": {
-                    "name": "Desktop Commander",
-                    "description": "System-level control and terminal access",
-                    "options": {
-                        "official": {
-                            "install": "npx @wonderwhy-er/desktop-commander@latest setup",
-                            "config_name": "desktop-commander",
-                            "env_vars": []
-                        }
-                    }
-                },
-                "playwright": {
-                    "name": "Playwright MCP Server",
-                    "description": "Browser automation and testing with Playwright",
-                    "options": {
-                        "official": {
-                            "install": "npm install -g @executeautomation/playwright-mcp-server",
-                            "config_name": "playwright-mcp",
-                            "env_vars": []
-                        }
-                    }
-                },
-                "testsprite": {
-                    "name": "TestSprite MCP Server",
-                    "description": "Automated testing with AI-powered test generation",
-                    "options": {
-                        "official": {
-                            "install": "npm install -g @testsprite/mcp-server",
-                            "config_name": "testsprite-mcp",
-                            "env_vars": ["TESTSPRITE_API_KEY"]
-                        }
-                    }
-                }
-            },
-            "version_control": {
-                "github": {
-                    "name": "GitHub Integration",
-                    "description": "GitHub repository and issue management",
-                    "options": {
-                        "official": {
-                            "install": "npx -y @modelcontextprotocol/server-github",
-                            "config_name": "github",
-                            "env_vars": ["GITHUB_PERSONAL_ACCESS_TOKEN"]
-                        }
-                    }
-                },
-                "gitlab": {
-                    "name": "GitLab Integration",
-                    "description": "GitLab repository and CI/CD integration",
-                    "options": {
-                        "enhanced": {
-                            "install": "uvx --from git+https://github.com/zereight/gitlab-mcp gitlab-mcp",
-                            "config_name": "gitlab",
-                            "env_vars": ["GITLAB_TOKEN", "GITLAB_URL"]
-                        }
-                    }
-                }
-            }
-        }
+        """Get server definitions with installation options from JSON config file."""
+        # Try multiple locations for the config file
+        config_locations = [
+            # 1. User config directory (platform-specific, for user customizations)
+            get_config_directory() / "server_definitions.json",
+            # 2. Legacy location (for backward compatibility)
+            Path.home() / ".meta-mcp" / "server_definitions.json",
+            # 3. Current working directory (for development)
+            Path.cwd() / "server_definitions.json",
+            # 4. Package data (for pip installations)
+            Path(__file__).parent / "server_definitions.json",
+        ]
+        
+        # Try package resource first (most reliable for pip packages)
+        try:
+            import importlib.resources as resources
+            with resources.open_text(__package__, "server_definitions.json") as f:
+                return json.load(f)
+        except (ImportError, FileNotFoundError, AttributeError):
+            # Fall back to file system locations
+            pass
+        
+        # Try filesystem locations
+        for config_path in config_locations:
+            try:
+                if config_path.exists():
+                    with open(config_path, 'r') as f:
+                        logger.info(f"Loaded server definitions from: {config_path}")
+                        return json.load(f)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse server definitions config at {config_path}: {e}")
+                continue
+            except Exception as e:
+                logger.error(f"Error loading server definitions from {config_path}: {e}")
+                continue
+        
+        logger.warning("No server definitions config file found, using empty definitions")
+        return {}
+
+    def create_user_config_template(self) -> str:
+        """Create a template server definitions config in user's platform-specific config directory."""
+        user_config_dir = get_config_directory()
+        user_config_dir.mkdir(parents=True, exist_ok=True)
+        user_config_path = user_config_dir / "server_definitions.json"
+        
+        if user_config_path.exists():
+            return f"User config already exists at: {user_config_path}"
+        
+        # Copy the default config to user directory
+        try:
+            import importlib.resources as resources
+            with resources.open_text(__package__, "server_definitions.json") as f:
+                default_config = f.read()
+            
+            with open(user_config_path, 'w') as f:
+                f.write(default_config)
+            
+            return f"Created user config template at: {user_config_path}"
+        except Exception as e:
+            logger.error(f"Failed to create user config template: {e}")
+            return f"Failed to create user config template: {e}"
 
     async def _get_install_command(self, server_name: str, option_name: str) -> Optional[str]:
         """Get installation command for a server and option."""
