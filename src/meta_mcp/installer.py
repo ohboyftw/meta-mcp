@@ -12,12 +12,13 @@ import platform
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 import httpx
 
 from .config import MCPConfig
 from .logging_manager import InstallationLogManager
+from .integration_manager import MCPIntegrationManager
 from .models import (
     MCPInstallationRequest,
     MCPInstallationResult,
@@ -25,6 +26,10 @@ from .models import (
     MCPServerInfo,
     MCPServerStatus,
     MCPServerWithOptions,
+    CompleteInstallationResult,
+    MCPServerOptionEnhanced,
+    MCPServerDefinitionEnhanced,
+    IntegrationResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -67,6 +72,9 @@ class MCPInstaller:
         
         # Enhanced logging
         self.log_manager = InstallationLogManager()
+        
+        # Integration manager for client configuration
+        self.integration_manager = MCPIntegrationManager()
         
         # Server definitions (self-contained)
         self.server_definitions = self._get_server_definitions()
@@ -193,6 +201,204 @@ class MCPInstaller:
                 config_name=config_name,
                 message=f"Installation error: {str(e)}"
             )
+
+    async def install_server_complete(
+        self,
+        server_name: str,
+        option_name: str = "official",
+        client_targets: List[str] = None,
+        env_vars: Optional[Dict[str, str]] = None
+    ) -> CompleteInstallationResult:
+        """Complete installation: install + integrate with MCP clients."""
+        
+        results = CompleteInstallationResult(
+            server_name=server_name,
+            installation=None,
+            integrations=[],
+            overall_success=False,
+            summary=""
+        )
+        
+        try:
+            # STEP 1: Install the server
+            install_request = MCPInstallationRequest(
+                server_name=server_name,
+                option_name=option_name,
+                env_vars=env_vars,
+                auto_configure=False  # We'll handle integration ourselves
+            )
+            
+            install_result = await self.install_server(install_request)
+            results.installation = install_result
+            
+            if not install_result.success:
+                results.summary = f"❌ Installation failed: {install_result.message}"
+                return results
+            
+            # STEP 2: Get server configuration for integration
+            server_config = self._get_enhanced_server_config(server_name, option_name)
+            
+            if not server_config:
+                results.summary = f"❌ No integration configuration found for {server_name}"
+                return results
+            
+            # Default to Claude Desktop and local .mcp.json if no targets specified
+            if client_targets is None:
+                client_targets = ["claude_desktop", "local_mcp_json"]
+            
+            # STEP 3: Integrate with MCP clients
+            logger.info(f"Integrating {server_name} with clients: {client_targets}")
+            
+            integration_results = await self.integration_manager.integrate_server(
+                server_name,
+                server_config,
+                client_targets
+            )
+            
+            results.integrations = [
+                IntegrationResult(
+                    success=r.success,
+                    client_name=r.client_name,
+                    config_path=r.config_path,
+                    message=r.message,
+                    restart_required=r.restart_required
+                )
+                for r in integration_results
+            ]
+            
+            # Overall success if installation succeeded and at least one integration worked
+            successful_integrations = [r for r in integration_results if r.success]
+            results.overall_success = len(successful_integrations) > 0
+            
+            # Generate summary message
+            if results.overall_success:
+                restart_needed = any(r.restart_required for r in integration_results if r.success)
+                
+                message = f"✅ Successfully installed and configured {server_name}\n\n"
+                message += "**Integrations:**\n"
+                
+                for integration in results.integrations:
+                    status = "✅" if integration.success else "❌" 
+                    message += f"{status} {integration.client_name}: {integration.message}\n"
+                
+                if restart_needed:
+                    message += "\n🔄 **Action Required**: Restart Claude Desktop to activate the new server"
+                
+                results.summary = message
+            else:
+                results.summary = f"❌ Installation succeeded but integration failed for {server_name}"
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Complete installation failed for {server_name}: {e}", exc_info=True)
+            results.summary = f"❌ Complete installation failed: {str(e)}"
+            return results
+    
+    def _get_enhanced_server_config(self, server_name: str, option_name: str) -> Optional[MCPServerOptionEnhanced]:
+        """Get enhanced server configuration with integration support."""
+        try:
+            # Look through all categories for the server
+            for category_servers in self.server_definitions.values():
+                if server_name in category_servers:
+                    server_info = category_servers[server_name]
+                    if option_name in server_info.get("options", {}):
+                        option_data = server_info["options"][option_name]
+                        
+                        # Convert to enhanced model if it has integration data
+                        if "integrations" in option_data:
+                            return MCPServerOptionEnhanced(**option_data)
+                        else:
+                            # Create basic integration config for legacy servers
+                            return self._create_basic_integration_config(server_name, option_data)
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting enhanced server config for {server_name}: {e}")
+            return None
+    
+    def _create_basic_integration_config(self, server_name: str, option_data: Dict) -> MCPServerOptionEnhanced:
+        """Create basic integration configuration for legacy server definitions."""
+        from .models import MCPClientIntegration, MCPEnvironmentVariable, MCPPlatformSupport
+        
+        # Extract install command
+        install_command = option_data.get("install", "")
+        
+        # Determine command and args for integration
+        if install_command.startswith("uvx"):
+            if "--from" in install_command:
+                parts = install_command.split()
+                if len(parts) >= 4:
+                    command = parts[-1]  # Last part is usually the command name
+                    args = []
+                else:
+                    command = "uvx"
+                    args = parts[1:]
+            else:
+                parts = install_command.split()
+                command = parts[-1] if len(parts) > 1 else server_name
+                args = []
+        elif install_command.startswith("npx"):
+            parts = install_command.split()
+            command = "npx"
+            args = parts[1:]  # Include -y and package name
+        else:
+            # Fallback
+            command = server_name
+            args = []
+        
+        # Create basic integration configurations
+        integrations = {
+            "claude_desktop": MCPClientIntegration(
+                config_path="~/Library/Application Support/Claude/claude_desktop_config.json",
+                config_template={
+                    "mcpServers": {
+                        server_name: {
+                            "command": command,
+                            "args": args,
+                            "env": {}
+                        }
+                    }
+                },
+                restart_required=True,
+                instructions="Restart Claude Desktop after adding this configuration"
+            ),
+            "local_mcp_json": MCPClientIntegration(
+                config_path="./.mcp.json",
+                config_template={
+                    "mcpServers": {
+                        server_name: {
+                            "command": command,
+                            "args": args,
+                            "env": {}
+                        }
+                    }
+                },
+                restart_required=False,
+                instructions="Add to local .mcp.json for project-specific usage"
+            )
+        }
+        
+        # Convert env_vars from list to objects
+        env_vars = []
+        if "env_vars" in option_data:
+            for env_var in option_data.get("env_vars", []):
+                if isinstance(env_var, str):
+                    env_vars.append(MCPEnvironmentVariable(
+                        name=env_var,
+                        description=f"Environment variable for {server_name}",
+                        required=True
+                    ))
+                elif isinstance(env_var, dict):
+                    env_vars.append(MCPEnvironmentVariable(**env_var))
+        
+        return MCPServerOptionEnhanced(
+            install=install_command,
+            integrations=integrations,
+            env_vars=env_vars,
+            platform_support=MCPPlatformSupport()
+        )
 
     def _get_server_definitions(self) -> Dict[str, Dict]:
         """Get server definitions with installation options from JSON config file."""

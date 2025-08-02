@@ -11,6 +11,7 @@ import click
 
 from .server import MetaMCPServer
 from .installer import MCPInstaller
+from .models import MCPInstallationRequest
 
 
 @click.group()
@@ -176,6 +177,228 @@ def errors():
             print(f"  Solution: {solution}")
     
     asyncio.run(_show_errors())
+
+@main.command()
+@click.argument('server_name')
+@click.option('--option', default='official', help='Installation option')
+@click.option('--clients', multiple=True, help='Target MCP clients (claude_desktop, gemini, local_mcp_json)')
+@click.option('--no-integration', is_flag=True, help='Skip integration step')
+@click.option('--env-var', multiple=True, help='Environment variables in KEY=VALUE format')
+def install(server_name: str, option: str, clients: tuple, no_integration: bool, env_var: tuple):
+    """Install MCP server and integrate with clients."""
+    
+    async def _install():
+        installer = MCPInstaller()
+        
+        # Parse environment variables
+        env_vars = {}
+        for var in env_var:
+            if '=' in var:
+                key, value = var.split('=', 1)
+                env_vars[key] = value
+            else:
+                print(f"Warning: Invalid environment variable format: {var} (should be KEY=VALUE)")
+        
+        if no_integration:
+            # Old behavior - install only
+            request = MCPInstallationRequest(
+                server_name=server_name,
+                option_name=option,
+                env_vars=env_vars if env_vars else None
+            )
+            result = await installer.install_server(request)
+            print(result.message)
+        else:
+            # New behavior - install + integrate
+            client_targets = list(clients) if clients else None
+            result = await installer.install_server_complete(
+                server_name, option, client_targets, env_vars if env_vars else None
+            )
+            
+            print(result.summary)
+            
+            # Show detailed integration results
+            if result.integrations:
+                print("\n📋 **Integration Details:**")
+                for integration in result.integrations:
+                    status = "✅" if integration.success else "❌"
+                    print(f"  {status} {integration.client_name}: {integration.message}")
+                    if integration.success and integration.restart_required:
+                        print(f"    🔄 Restart required")
+    
+    asyncio.run(_install())
+
+
+@main.command()
+@click.argument('server_name')
+def status(server_name: str):
+    """Check server installation and integration status."""
+    
+    async def _status():
+        installer = MCPInstaller()
+        
+        # Check installation
+        installed = any(
+            info["server_name"] == server_name 
+            for info in installer.installed_servers.values()
+        )
+        print(f"📦 **Installation**: {'✅ Installed' if installed else '❌ Not installed'}")
+        
+        if installed:
+            # Check integrations
+            integrations = await installer.integration_manager.list_integrations(server_name)
+            
+            print(f"\n🔗 **Integrations**:")
+            for client, integrated in integrations.items():
+                status = "✅ Active" if integrated else "❌ Not configured"
+                print(f"  {client}: {status}")
+    
+    asyncio.run(_status())
+
+
+@main.command()
+@click.argument('server_name')
+@click.option('--clients', multiple=True, help='Remove from specific clients only')
+def uninstall(server_name: str, clients: tuple):
+    """Uninstall server and remove integrations."""
+    
+    async def _uninstall():
+        installer = MCPInstaller()
+        
+        if clients:
+            # Remove from specific clients only
+            results = await installer.integration_manager.remove_server_integration(
+                server_name, list(clients)
+            )
+            
+            for result in results:
+                status = "✅" if result.success else "❌"
+                print(f"{status} {result.client_name}: {result.message}")
+        else:
+            # Complete uninstall
+            print(f"🗑️  Uninstalling {server_name}...")
+            
+            # Remove integrations first
+            results = await installer.integration_manager.remove_server_integration(server_name)
+            
+            for result in results:
+                if result.success:
+                    print(f"✅ Removed from {result.client_name}")
+            
+            # Remove installation
+            success = await installer.uninstall_server(server_name)
+            
+            if success:
+                print(f"✅ {server_name} completely uninstalled")
+            else:
+                print(f"❌ Failed to uninstall {server_name}")
+    
+    asyncio.run(_uninstall())
+
+
+@main.command()
+@click.argument('server_name')
+@click.option('--clients', multiple=True, help='Integrate with specific clients')
+def integrate(server_name: str, clients: tuple):
+    """Integrate already installed server with MCP clients."""
+    
+    async def _integrate():
+        installer = MCPInstaller()
+        
+        # Check if server is installed
+        installed = any(
+            info["server_name"] == server_name 
+            for info in installer.installed_servers.values()
+        )
+        
+        if not installed:
+            print(f"❌ Server {server_name} is not installed. Install it first.")
+            return
+        
+        # Get server configuration
+        server_config = installer._get_enhanced_server_config(server_name, "official")
+        if not server_config:
+            print(f"❌ No integration configuration found for {server_name}")
+            return
+        
+        client_targets = list(clients) if clients else ["claude_desktop", "local_mcp_json"]
+        
+        # Perform integration
+        results = await installer.integration_manager.integrate_server(
+            server_name, server_config, client_targets
+        )
+        
+        print(f"🔗 Integrating {server_name} with clients...")
+        
+        for result in results:
+            status = "✅" if result.success else "❌"
+            print(f"{status} {result.client_name}: {result.message}")
+            if result.success and result.restart_required:
+                print(f"    🔄 Restart required")
+    
+    asyncio.run(_integrate())
+
+
+@main.command()
+def validate_configs():
+    """Validate MCP client configuration files."""
+    
+    async def _validate():
+        installer = MCPInstaller()
+        
+        print("🔍 Validating MCP client configurations...")
+        
+        validation_results = await installer.integration_manager.validate_client_configs()
+        
+        for client, result in validation_results.items():
+            print(f"\n📋 **{client.replace('_', ' ').title()}**:")
+            
+            if not result["exists"]:
+                print("  ❌ Configuration file not found")
+                continue
+            
+            if not result["valid_json"]:
+                print("  ❌ Invalid JSON format")
+                for error in result["errors"]:
+                    print(f"    • {error}")
+                continue
+            
+            print("  ✅ Configuration file is valid")
+            print(f"  📊 MCP servers configured: {result['server_count']}")
+            
+            if result["errors"]:
+                print("  ⚠️  Warnings:")
+                for error in result["errors"]:
+                    print(f"    • {error}")
+    
+    asyncio.run(_validate())
+
+
+@main.command()
+def list_clients():
+    """List supported MCP clients and their config paths."""
+    
+    async def _list_clients():
+        installer = MCPInstaller()
+        
+        config_paths = installer.integration_manager.get_client_config_paths()
+        
+        print("🔗 **Supported MCP Clients**:\n")
+        
+        for client, path in config_paths.items():
+            print(f"**{client.replace('_', ' ').title()}**:")
+            print(f"  Config path: {path}")
+            
+            # Check if config exists
+            from pathlib import Path
+            config_file = Path(path)
+            if config_file.exists():
+                print("  Status: ✅ Configuration file exists")
+            else:
+                print("  Status: ❌ Configuration file not found")
+            print()
+    
+    asyncio.run(_list_clients())
 
 
 def run_stdio_server():

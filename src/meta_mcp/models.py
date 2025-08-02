@@ -4,7 +4,7 @@ Data models for Meta MCP Server.
 
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, Field, HttpUrl
 
 
@@ -21,6 +21,12 @@ class MCPServerCategory(str, Enum):
     MONITORING = "monitoring"
     SECURITY = "security"
     OTHER = "other"
+
+class MCPInstallationScope(str, Enum):
+    """Installation scope levels for MCP servers."""
+    GLOBAL = "global"       # System-wide installation (available to all users/projects)
+    USER = "user"          # User-specific installation (available to all projects for this user)
+    PROJECT = "project"    # Project-specific installation (only available in current directory)
 
 
 class MCPServerStatus(str, Enum):
@@ -63,6 +69,81 @@ class MCPServerOption(BaseModel):
     repository_url: Optional[HttpUrl] = Field(None, description="Specific repository for this option")
     recommended: bool = Field(False, description="Whether this is the recommended option")
 
+class MCPClientIntegration(BaseModel):
+    """Integration configuration for a specific MCP client."""
+    config_path: str = Field(description="Path to client's configuration file")
+    config_template: Dict[str, Any] = Field(description="Configuration template to merge")
+    restart_required: bool = Field(default=False, description="Whether client restart is required")
+    instructions: Optional[str] = Field(None, description="Setup instructions for user")
+
+
+class MCPEnvironmentVariable(BaseModel):
+    """Environment variable configuration."""
+    name: str = Field(description="Environment variable name")
+    description: str = Field(description="Variable description")
+    required: bool = Field(default=False, description="Whether variable is required")
+    example: Optional[str] = Field(None, description="Example value")
+
+
+class MCPPlatformSupport(BaseModel):
+    """Platform support information."""
+    windows: bool = Field(default=True, description="Windows support")
+    macos: bool = Field(default=True, description="macOS support")
+    linux: bool = Field(default=True, description="Linux support")
+
+
+class MCPServerOptionEnhanced(BaseModel):
+    """Enhanced installation option with integration support."""
+    # Installation configuration
+    install: str = Field(description="Installation command")
+    verify_install: Optional[str] = Field(None, description="Command to verify installation")
+    uninstall: Optional[str] = Field(None, description="Uninstallation command")
+    
+    # Integration configurations
+    integrations: Dict[str, MCPClientIntegration] = Field(
+        default_factory=dict, 
+        description="Client integration configurations"
+    )
+    
+    # Environment and requirements
+    env_vars: List[MCPEnvironmentVariable] = Field(
+        default_factory=list, 
+        description="Environment variable configurations"
+    )
+    prerequisites: List[str] = Field(
+        default_factory=list, 
+        description="Required system dependencies"
+    )
+    platform_support: MCPPlatformSupport = Field(
+        default_factory=MCPPlatformSupport, 
+        description="Platform support information"
+    )
+
+
+class MCPServerDefinitionEnhanced(BaseModel):
+    """Enhanced server definition with complete integration support."""
+    name: str = Field(description="Server display name")
+    description: str = Field(description="Server description")
+    repository_url: Optional[HttpUrl] = Field(None, description="Repository URL")
+    documentation_url: Optional[HttpUrl] = Field(None, description="Documentation URL")
+    author: Optional[str] = Field(None, description="Server author")
+    category: str = Field(description="Server category")
+    options: Dict[str, MCPServerOptionEnhanced] = Field(
+        description="Installation options with integration support"
+    )
+
+
+class IntegrationResult(BaseModel):
+    """Result of MCP client integration."""
+    success: bool = Field(description="Whether integration succeeded")
+    client_name: str = Field(description="Name of the MCP client")
+    config_path: str = Field(description="Path to configuration file")
+    message: str = Field(description="Result message")
+    restart_required: bool = Field(description="Whether client restart is required")
+
+
+# CompleteInstallationResult moved below MCPInstallationResult
+
 
 class MCPServerWithOptions(MCPServerInfo):
     """MCP server with installation options."""
@@ -102,6 +183,17 @@ class MCPInstallationResult(BaseModel):
     config_name: str = Field(description="Configuration name in Claude")
     message: str = Field(description="Installation message or error")
     installed_at: datetime = Field(default_factory=datetime.now, description="Installation timestamp")
+
+class CompleteInstallationResult(BaseModel):
+    """Result of complete installation (install + integrate)."""
+    server_name: str = Field(description="Name of the server")
+    installation: Optional[MCPInstallationResult] = Field(None, description="Installation result")
+    integrations: List[IntegrationResult] = Field(
+        default_factory=list, 
+        description="Integration results"
+    )
+    overall_success: bool = Field(description="Overall operation success")
+    summary: str = Field(description="Summary message for user")
 
 
 class MCPConfigEntry(BaseModel):
