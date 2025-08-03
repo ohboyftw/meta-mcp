@@ -66,16 +66,80 @@ class AIFallbackManager:
         return await self._execute_ai_installation(ai_request)
 
     async def _generate_ai_suggestions(self, request: AIInstallationRequest) -> None:
-        """Generate AI suggestions for installation."""
+        """Generate AI suggestions with registry search."""
         server_name = request.server_name
 
-        # Common AI suggestions based on server name patterns
+        # First check built-in patterns
         suggestions = self._get_installation_suggestions(server_name)
+        
+        if not suggestions:
+            # Search registries for real packages
+            print(f"🔍 Searching package registries for '{server_name}'...")
+            
+            # Search npm registry
+            npm_packages = await self._search_npm_registry(server_name)
+            
+            # Search PyPI registry  
+            pypi_packages = await self._search_pypi_registry(server_name)
+            
+            if npm_packages:
+                # Use the most relevant npm package
+                best_match = npm_packages[0]
+                print(f"📦 Found npm package: {best_match}")
+                
+                # Extract command name from package name
+                if best_match.startswith('@'):
+                    # For scoped packages like @modelcontextprotocol/server-brave-search
+                    command_name = best_match.split('/')[-1]
+                else:
+                    # For regular packages
+                    command_name = best_match
+                
+                suggestions = {
+                    "command": f"npm install -g {best_match}",
+                    "integration": {
+                        "command": command_name,
+                        "args": [],
+                        "description": f"Found via npm search: {best_match}"
+                    }
+                }
+                
+            elif pypi_packages:
+                # Use the most relevant PyPI package  
+                best_match = pypi_packages[0]
+                print(f"🐍 Found PyPI package: {best_match}")
+                
+                suggestions = {
+                    "command": f"pip install {best_match}",
+                    "integration": {
+                        "command": "python",
+                        "args": ["-m", best_match.replace("-", "_")],
+                        "description": f"Found via PyPI search: {best_match}"
+                    }
+                }
+                
+            else:
+                # Last resort: GitHub repository search
+                print("🔍 Searching GitHub repositories...")
+                github_repo = await self._search_github_repos(server_name)
+                
+                if github_repo:
+                    print(f"📁 Found GitHub repo: {github_repo}")
+                    
+                    suggestions = {
+                        "command": f"uvx --from git+{github_repo} {server_name}",
+                        "integration": {
+                            "command": server_name,
+                            "args": [],
+                            "description": f"Found GitHub repo: {github_repo}"
+                        }
+                    }
+                else:
+                    print("❌ No packages found in registries or GitHub")
         
         if suggestions:
             request.suggested_command = suggestions["command"]
             request.suggested_integration = suggestions["integration"]
-            request.env_vars = suggestions.get("env_vars")
 
     def _get_installation_suggestions(self, server_name: str) -> Optional[Dict[str, Any]]:
         """Get installation suggestions based on server name patterns."""
@@ -159,15 +223,181 @@ class AIFallbackManager:
 
         return None
 
+    async def _search_npm_registry(self, server_name: str) -> List[str]:
+        """Search npm registry for MCP server packages."""
+        search_terms = [
+            server_name,
+            f"{server_name}-mcp",
+            f"mcp-{server_name}",
+            f"@{server_name}/mcp-server",
+            f"@modelcontextprotocol/server-{server_name}",
+            f"@executeautomation/{server_name}-mcp-server"
+        ]
+        
+        found_packages = []
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                for term in search_terms:
+                    try:
+                        response = await client.get(f"https://registry.npmjs.org/-/v1/search?text={term}")
+                        if response.status_code == 200:
+                            results = response.json()
+                            for pkg in results.get('objects', []):
+                                name = pkg['package']['name']
+                                description = pkg['package'].get('description', '').lower()
+                                keywords = pkg['package'].get('keywords', [])
+                                keywords_str = ' '.join(keywords).lower() if keywords else ''
+                                
+                                # Check if it's MCP-related
+                                if (
+                                    'mcp' in description or 
+                                    'model context protocol' in description or
+                                    'mcp' in keywords_str or
+                                    'model-context-protocol' in name.lower()
+                                ):
+                                    found_packages.append(name)
+                                    
+                        # Limit requests to avoid rate limiting
+                        if len(found_packages) >= 3:
+                            break
+                            
+                    except Exception as e:
+                        print(f"Error searching npm for {term}: {e}")
+                        continue
+                        
+        except ImportError:
+            print("httpx not available for npm search")
+        except Exception as e:
+            print(f"npm registry search failed: {e}")
+            
+        return found_packages[:3]  # Return top 3 matches
+
+    async def _search_pypi_registry(self, server_name: str) -> List[str]:
+        """Search PyPI registry for MCP server packages."""
+        search_terms = [
+            server_name,
+            f"{server_name}-mcp", 
+            f"mcp-{server_name}",
+            f"mcp_{server_name}",
+            f"{server_name.replace('-', '_')}"
+        ]
+        
+        found_packages = []
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                for term in search_terms:
+                    try:
+                        # Try exact package lookup first
+                        response = await client.get(f"https://pypi.org/pypi/{term}/json")
+                        if response.status_code == 200:
+                            pkg_info = response.json()
+                            description = pkg_info.get('info', {}).get('summary', '').lower()
+                            name = pkg_info.get('info', {}).get('name', term)
+                            
+                            if (
+                                'mcp' in description or 
+                                'model context protocol' in description or
+                                'mcp' in name.lower()
+                            ):
+                                found_packages.append(name)
+                                
+                    except Exception:
+                        # If exact lookup fails, try search API
+                        try:
+                            search_response = await client.get(
+                                f"https://pypi.org/search/?q={term}",
+                                headers={'Accept': 'application/json'}
+                            )
+                            # PyPI search API is limited, so we'll skip complex parsing
+                        except Exception:
+                            continue
+                            
+        except ImportError:
+            print("httpx not available for PyPI search")
+        except Exception as e:
+            print(f"PyPI registry search failed: {e}")
+            
+        return found_packages[:3]  # Return top 3 matches
+
+    async def _search_github_repos(self, server_name: str) -> Optional[str]:
+        """Search GitHub for MCP server repositories."""
+        search_queries = [
+            f"{server_name} mcp server",
+            f"mcp {server_name}",
+            f"model context protocol {server_name}",
+            f"{server_name}-mcp-server"
+        ]
+        
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                for query in search_queries:
+                    try:
+                        headers = {'Accept': 'application/vnd.github.v3+json'}
+                        # Note: Could add GitHub token here for higher rate limits
+                        # if hasattr(self, 'github_token') and self.github_token:
+                        #     headers['Authorization'] = f'token {self.github_token}'
+                            
+                        response = await client.get(
+                            f"https://api.github.com/search/repositories?q={query}",
+                            headers=headers
+                        )
+                        
+                        if response.status_code == 200:
+                            results = response.json()
+                            for repo in results.get('items', [])[:3]:  # Check top 3
+                                description = (repo.get('description') or '').lower()
+                                name = repo.get('name', '').lower()
+                                
+                                if (
+                                    'mcp' in description or 
+                                    'model context protocol' in description or
+                                    'mcp' in name
+                                ):
+                                    return repo['clone_url'].replace('.git', '')
+                                    
+                    except Exception as e:
+                        print(f"Error searching GitHub for {query}: {e}")
+                        continue
+                        
+        except ImportError:
+            print("httpx not available for GitHub search")
+        except Exception as e:
+            print(f"GitHub repository search failed: {e}")
+            
+        return None
+
     async def _request_user_approval(self, request: AIInstallationRequest) -> bool:
-        """Request user approval for AI-suggested installation."""
+        """Request user approval with search context."""
         
         print("\n" + "=" * 60)
         print("🤖 AI-ASSISTED INSTALLATION FALLBACK")
         print("=" * 60)
         print(f"📦 Server: {request.server_name}")
         print(f"❌ Standard installation failed: {request.reason}")
-        print("\n🧠 AI Suggestion:")
+        
+        # Show search context based on description
+        if request.suggested_integration:
+            description = request.suggested_integration.get("description", "")
+            
+            if "Found via npm search:" in description:
+                print("🔍 Search Result: Found via npm registry search")
+                package_name = description.split("Found via npm search: ")[-1]
+                print(f"   Package: {package_name}")
+            elif "Found via PyPI search:" in description:
+                print("🔍 Search Result: Found via PyPI registry search") 
+                package_name = description.split("Found via PyPI search: ")[-1]
+                print(f"   Package: {package_name}")
+            elif "Found GitHub repo:" in description:
+                print("🔍 Search Result: Found via GitHub repository search")
+                repo_url = description.split("Found GitHub repo: ")[-1]
+                print(f"   Repository: {repo_url}")
+            else:
+                print("🧠 Source: Generated from built-in patterns")
+                
+        print(f"\n💡 AI Suggestion:")
         print(f"   Command: {request.suggested_command}")
         
         if request.env_vars:
