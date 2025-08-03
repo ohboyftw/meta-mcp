@@ -240,6 +240,29 @@ class CompleteInstallationResult(BaseModel):
     overall_success: bool = Field(description="Overall operation success")
     summary: str = Field(description="Summary message for user")
 
+class AIInstallationRequest(BaseModel):
+    """Request for AI-assisted installation as fallback."""
+    
+    server_name: str = Field(description="Name of the server to install")
+    reason: str = Field(description="Reason for installation failure")
+    suggested_command: Optional[str] = Field(None, description="AI-suggested installation command")
+    suggested_integration: Optional[Dict[str, Any]] = Field(None, description="AI-suggested integration config")
+    env_vars: Optional[Dict[str, str]] = Field(None, description="Environment variables needed")
+    clients: Optional[List[str]] = Field(None, description="Target MCP clients")
+    user_approved: bool = Field(default=False, description="Whether user approved the AI suggestion")
+
+
+class AIInstallationResult(BaseModel):
+    """Result of AI-assisted installation."""
+    
+    success: bool = Field(description="Whether AI installation succeeded")
+    server_name: str = Field(description="Server name that was installed")
+    method: str = Field(description="Installation method used by AI")
+    command_executed: str = Field(description="Actual command executed")
+    integration_created: bool = Field(default=False, description="Whether integration config was created")
+    message: str = Field(description="Installation result message")
+    warnings: List[str] = Field(default_factory=list, description="Any warnings during installation")
+
 
 class MCPConfigEntry(BaseModel):
     """Entry in MCP configuration for a server."""

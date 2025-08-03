@@ -20,6 +20,7 @@ from .tools import (
     ValidateConfigTool,
     GetManagerStatsTool,
     RefreshServerCacheTool,
+    AIAssistedInstallTool,
 )
 
 
@@ -65,6 +66,7 @@ class MetaMCPServer:
             ValidateConfigTool(),
             GetManagerStatsTool(),
             RefreshServerCacheTool(),
+            AIAssistedInstallTool(),
         ]
 
     def create_fastmcp_server(self, host: str = "0.0.0.0", port: int = 8000) -> FastMCP:

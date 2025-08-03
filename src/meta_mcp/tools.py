@@ -814,3 +814,68 @@ class AnalyzeInstallationErrorsTool(Tool):
         )
 
         return content
+
+class AIAssistedInstallTool(Tool):
+    """AI-assisted installation fallback for servers not in the registry."""
+
+    def __init__(self):
+        super().__init__()
+        from .ai_fallback import AIFallbackManager
+        self.ai_fallback_manager = AIFallbackManager()
+
+    def apply(
+        self, 
+        server_name: str,
+        reason: str = "Server not found in registry",
+        clients: Optional[List[str]] = None
+    ) -> str:
+        """
+        Request AI-assisted installation for servers not in the Meta MCP registry.
+        
+        Args:
+            server_name: Name of the server to install
+            reason: Reason why standard installation cannot be used
+            clients: Target MCP clients for integration
+            
+        Returns:
+            Result of AI-assisted installation attempt.
+        """
+        async def _ai_install():
+            return await self.ai_fallback_manager.request_ai_installation(
+                server_name=server_name,
+                failure_reason=reason,
+                target_clients=clients or ["local_mcp_json"]
+            )
+        
+        # Run AI installation
+        result = run_async_safely(_ai_install())
+        
+        if result.success:
+            content = f"✅ AI-assisted installation successful!\n\n"
+            content += f"**Server:** {result.server_name}\n"
+            content += f"**Method:** {result.method}\n"
+            content += f"**Command executed:** `{result.command_executed}`\n"
+            
+            if result.integration_created:
+                content += f"**Integration:** ✅ Configuration created\n"
+            else:
+                content += f"**Integration:** ❌ Manual configuration required\n"
+            
+            content += f"\n{result.message}\n"
+            
+            if result.warnings:
+                content += f"\n⚠️ **Warnings:**\n"
+                for warning in result.warnings:
+                    content += f"- {warning}\n"
+                    
+        else:
+            content = f"❌ AI-assisted installation failed\n\n"
+            content += f"**Server:** {result.server_name}\n"
+            content += f"**Error:** {result.message}\n\n"
+            content += "**Suggestions:**\n"
+            content += "- Check the server name spelling\n"
+            content += "- Verify the server exists and is installable\n"
+            content += "- Try installing manually with specific commands\n"
+            content += "- Check if prerequisites (Node.js, Python) are installed\n"
+            
+        return content

@@ -18,6 +18,7 @@ import httpx
 from .config import MCPConfig
 from .logging_manager import InstallationLogManager
 from .integration_manager import MCPIntegrationManager
+from .ai_fallback import AIFallbackManager
 from .models import (
     MCPInstallationRequest,
     MCPInstallationResult,
@@ -72,6 +73,9 @@ class MCPInstaller:
 
         # Integration manager for client configuration
         self.integration_manager = MCPIntegrationManager()
+
+        # AI fallback manager for when standard installation fails
+        self.ai_fallback_manager = AIFallbackManager()
 
         # Server definitions (self-contained)
         self.server_definitions = self._get_server_definitions()
@@ -254,8 +258,60 @@ class MCPInstaller:
             results.installation = install_result
 
             if not install_result.success:
-                results.summary = f"❌ Installation failed: {install_result.message}"
-                return results
+                # FALLBACK: Try AI-assisted installation
+                print(f"⚠️ Standard installation failed for {server_name}")
+                print("🤖 Attempting AI-assisted installation as fallback...")
+                
+                ai_result = await self.ai_fallback_manager.request_ai_installation(
+                    server_name=server_name,
+                    failure_reason=install_result.message,
+                    target_clients=client_targets
+                )
+                
+                if ai_result.success:
+                    # Update the original installation result with AI success
+                    from .models import MCPInstallationResult
+                    
+                    results.installation = MCPInstallationResult(
+                        success=True,
+                        server_name=server_name,
+                        option_name=option_name,
+                        config_name=f"{server_name}-{option_name}",
+                        message=ai_result.message
+                    )
+                    
+                    # Mark as AI-installed for tracking
+                    self.installed_servers[f"{server_name}-{option_name}"] = {
+                        "server_name": server_name,
+                        "option_name": option_name,
+                        "install_command": ai_result.command_executed,
+                        "installed_at": datetime.now().isoformat(),
+                        "env_vars": {},
+                        "status": "ai_installed",
+                        "installation_method": "ai_fallback"
+                    }
+                    self._save_installation_log()
+                    
+                    # If AI created integration, we can skip the manual integration step
+                    if ai_result.integration_created:
+                        results.integrations = [
+                            IntegrationResult(
+                                success=True,
+                                client_name=client or "local_mcp_json",
+                                config_path="",
+                                message="Integrated via AI fallback",
+                                restart_required=True
+                            )
+                            for client in (client_targets or ["local_mcp_json"])
+                        ]
+                        results.overall_success = True
+                        results.summary = f"✅ {ai_result.message}"
+                        return results
+                        
+                else:
+                    # Both standard and AI installation failed
+                    results.summary = f"❌ Installation failed: {install_result.message}\n❌ AI fallback also failed: {ai_result.message}"
+                    return results
 
             # STEP 2: Get server configuration for integration
             server_config = self._get_enhanced_server_config(server_name, option_name)
