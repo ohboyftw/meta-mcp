@@ -10,7 +10,6 @@ from typing import AsyncIterator
 
 from mcp.server.fastmcp.server import FastMCP
 from mcp.server.fastmcp.tools.base import Tool as MCPTool
-from mcp.server.fastmcp.utilities.func_metadata import func_metadata
 
 from .tools import (
     SearchMcpServersTool,
@@ -27,7 +26,7 @@ from .tools import (
 def create_mcp_tool(tool_instance) -> MCPTool:
     """
     Convert a Meta MCP tool to a FastMCP tool.
-    
+
     This follows the exact pattern from Serena's implementation.
     """
     func_name = tool_instance.get_name()
@@ -54,7 +53,7 @@ def create_mcp_tool(tool_instance) -> MCPTool:
 
 class MetaMCPServer:
     """FastMCP-based Meta MCP Server."""
-    
+
     def __init__(self):
         """Initialize the server with all tools."""
         self.tools = [
@@ -67,12 +66,12 @@ class MetaMCPServer:
             GetManagerStatsTool(),
             RefreshServerCacheTool(),
         ]
-    
+
     def create_fastmcp_server(self, host: str = "0.0.0.0", port: int = 8000) -> FastMCP:
         """Create a FastMCP server instance."""
         mcp = FastMCP(host=host, port=port, lifespan=self.server_lifespan)
         return mcp
-    
+
     @asynccontextmanager
     async def server_lifespan(self, mcp_server: FastMCP) -> AsyncIterator[None]:
         """Manage server startup and shutdown with tool registration."""
@@ -81,15 +80,17 @@ class MetaMCPServer:
             for tool_instance in self.tools:
                 mcp_tool = create_mcp_tool(tool_instance)
                 mcp_server._tool_manager._tools[tool_instance.get_name()] = mcp_tool
-            
+
             print("Meta MCP Server: All tools registered successfully", file=sys.stderr)
-            print(f"Meta MCP Server: Registered {len(self.tools)} tools:", file=sys.stderr)
+            print(
+                f"Meta MCP Server: Registered {len(self.tools)} tools:", file=sys.stderr
+            )
             for tool in self.tools:
                 print(f"  - {tool.get_name()}", file=sys.stderr)
             print("Meta MCP Server: Ready to handle requests", file=sys.stderr)
-            
+
             yield
-            
+
         except Exception as e:
             print(f"Meta MCP Server: Error during startup: {e}", file=sys.stderr)
             raise
