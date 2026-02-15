@@ -1100,3 +1100,108 @@ class AnalyzeCapabilityStackTool(Tool):
             content += "No gaps detected — your capability stack is complete!\n"
 
         return content
+
+
+# ─── Project Init Tools ───────────────────────────────────────────────────────
+
+class ProjectInitTool(Tool):
+    """Bootstrap a project's MCP environment in one call. Creates .mcp.json with resolved env vars and enables project MCP servers in settings. Supports profiles (knowledge-stack, full) and merges with existing config."""
+
+    def __init__(self):
+        super().__init__()
+        from .project_init import ProjectInitializer
+        self.initializer = ProjectInitializer()
+
+    def apply(
+        self,
+        project_root: str = ".",
+        servers: Optional[List[str]] = None,
+        profile: Optional[str] = None,
+        include_knowledge_stack: bool = True,
+        validate_env: bool = True,
+        dry_run: bool = False,
+    ) -> str:
+        """
+        Bootstrap a project's MCP environment.
+
+        Args:
+            project_root: Path to project directory (default: current directory)
+            servers: Explicit list of server names to configure
+            profile: Use a named profile (knowledge-stack, knowledge-stack-full, full)
+            include_knowledge_stack: Include beacon/engram/rlm by default
+            validate_env: Check that required API keys are set in environment
+            dry_run: Preview changes without writing files
+        """
+        result = self.initializer.initialize_project(
+            project_root=project_root,
+            servers=servers,
+            profile=profile,
+            include_knowledge_stack=include_knowledge_stack,
+            validate_env=validate_env,
+            dry_run=dry_run,
+        )
+
+        content = "# Project Init Result\n\n"
+
+        if result.servers_configured:
+            content += f"**Configured:** {', '.join(result.servers_configured)}\n\n"
+        if result.servers_skipped:
+            content += f"**Skipped (already present):** {', '.join(result.servers_skipped)}\n\n"
+        if result.pre_existing_servers:
+            content += f"**Pre-existing:** {', '.join(result.pre_existing_servers)}\n\n"
+
+        if result.missing_env_vars:
+            content += "## Missing Environment Variables\n\n"
+            for server, vars_ in result.missing_env_vars.items():
+                content += f"- **{server}**: {', '.join(vars_)}\n"
+            content += "\nSet these in your shell environment for full functionality.\n\n"
+
+        if result.settings_updated:
+            content += "Settings updated: `enableAllProjectMcpServers: true`\n\n"
+
+        if result.warnings:
+            content += "## Warnings\n\n"
+            for w in result.warnings:
+                content += f"- {w}\n"
+            content += "\n"
+
+        if not result.servers_configured and not result.servers_skipped:
+            content += "No servers to configure.\n"
+
+        return content
+
+
+class ProjectValidateTool(Tool):
+    """Validate a project's MCP setup — checks .mcp.json, settings flag, command availability, and env var health."""
+
+    def __init__(self):
+        super().__init__()
+        from .project_init import ProjectInitializer
+        self.initializer = ProjectInitializer()
+
+    def apply(self, project_root: str = ".") -> str:
+        """
+        Validate a project's MCP configuration.
+
+        Args:
+            project_root: Path to project directory (default: current directory)
+        """
+        result = self.initializer.validate_project(project_root=project_root)
+
+        content = "# Project MCP Health Report\n\n"
+        content += f"- `.mcp.json`: {'found' if result.has_mcp_json else 'MISSING'}\n"
+        content += f"- `enableAllProjectMcpServers`: {'enabled' if result.has_settings_flag else 'DISABLED'}\n\n"
+
+        if result.healthy_servers:
+            content += f"**Healthy:** {', '.join(result.healthy_servers)}\n\n"
+
+        if result.unhealthy_servers:
+            content += "## Unhealthy Servers\n\n"
+            for name, reason in result.unhealthy_servers.items():
+                content += f"- **{name}**: {reason}\n"
+            content += "\n"
+
+        status = "HEALTHY" if result.overall_healthy else "UNHEALTHY"
+        content += f"**Overall: {status}**\n"
+
+        return content

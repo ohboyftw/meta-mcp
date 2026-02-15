@@ -1,7 +1,7 @@
 """
 Meta MCP Server - A FastMCP-based MCP server manager.
 
-Exposes 28 tools covering R1-R10:
+Exposes 30+ tools covering R1-R10 plus project init:
 - Core: search, info, install, list, uninstall, validate, stats, refresh
 - R1: detect_capability_gaps, suggest_workflow
 - R3: check_ecosystem_health
@@ -57,6 +57,9 @@ from .tools import (
     DiscoverPromptsTool,
     # R10: Capability Stack
     AnalyzeCapabilityStackTool,
+    # Project Init
+    ProjectInitTool,
+    ProjectValidateTool,
 )
 from .tools_base import Tool
 
@@ -109,6 +112,9 @@ class MetaMCPServer:
             DiscoverPromptsTool(),
             # R10: Capability Stack
             AnalyzeCapabilityStackTool(),
+            # Project Init
+            ProjectInitTool(),
+            ProjectValidateTool(),
         ]
 
     def create_fastmcp_server(self, host: str = "0.0.0.0", port: int = 8000) -> FastMCP:

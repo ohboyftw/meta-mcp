@@ -7,8 +7,8 @@ registry federation, multi-client, memory, orchestration, skills, and capability
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
-from pydantic import BaseModel, Field, HttpUrl
+from typing import Any, Dict, List, Optional
+from pydantic import BaseModel, Field
 
 
 # ─── Core Enums ───────────────────────────────────────────────────────────────
@@ -60,6 +60,19 @@ class ClientType(str, Enum):
     VSCODE = "vscode"
     WINDSURF = "windsurf"
     ZED = "zed"
+
+
+class ClaudeCodeScope(str, Enum):
+    """Scope for Claude Code MCP server registration.
+
+    Claude Code has three separate scopes, each stored in a different file:
+    - USER:    ~/.claude.json  (user-global)
+    - PROJECT: .mcp.json       (project root)
+    - LOCAL:   ~/.claude.json   (per-project override under ``projects.{path}.mcpServers``)
+    """
+    USER = "user"
+    PROJECT = "project"
+    LOCAL = "local"
 
 
 class SkillScope(str, Enum):
@@ -152,6 +165,14 @@ class MCPInstallationResult(BaseModel):
 
 
 class MCPConfigEntry(BaseModel):
+    """MCP server configuration entry.
+
+    The ``type`` field is **required** by Claude Code (``~/.claude.json``) but
+    is not used by Claude Desktop or most other clients.  When writing configs
+    for Claude Code, callers must set ``type="stdio"`` (or the appropriate
+    transport type).  For other clients the field should be omitted.
+    """
+    type: Optional[str] = Field(None, description="Transport type (required for Claude Code, e.g. 'stdio')")
     command: str = Field(description="Command to execute")
     args: List[str] = Field(default_factory=list, description="Command arguments")
     cwd: Optional[str] = Field(None, description="Working directory")
@@ -504,6 +525,62 @@ class CapabilityBundleResult(BaseModel):
     items: List[CapabilityBundleItem] = Field(description="Bundle items")
     overall_status: str = Field(description="Status of bundle install")
     summary: str = Field(description="Summary message")
+
+
+# ─── AI Fallback Models ───────────────────────────────────────────────────────
+
+class AIInstallationRequest(BaseModel):
+    """Request for AI-assisted installation fallback."""
+    server_name: str = Field(description="Name of the server that failed to install")
+    reason: str = Field(description="Reason why standard installation failed")
+    clients: List[str] = Field(default_factory=lambda: ["local_mcp_json"], description="Target MCP clients")
+    suggested_command: Optional[str] = Field(None, description="AI-suggested installation command")
+    suggested_integration: Optional[Dict[str, Any]] = Field(None, description="AI-suggested integration config")
+    env_vars: Optional[Dict[str, str]] = Field(None, description="Required environment variables")
+    user_approved: bool = Field(False, description="Whether user approved the suggestion")
+
+
+class AIInstallationResult(BaseModel):
+    """Result of an AI-assisted installation attempt."""
+    success: bool = Field(description="Whether the AI-assisted installation succeeded")
+    server_name: str = Field(description="Name of the server")
+    method: str = Field("ai_fallback", description="Installation method used")
+    command_executed: Optional[str] = Field(None, description="Command that was executed")
+    integration_created: bool = Field(False, description="Whether integration config was created")
+    message: str = Field(description="Result message")
+    warnings: List[str] = Field(default_factory=list, description="Any warnings")
+
+
+# ─── Project Init Models ─────────────────────────────────────────────────────
+
+class ProjectServerDefinition(BaseModel):
+    """Definition of a project-scoped MCP server."""
+    name: str = Field(description="Server identifier (e.g. 'beacon')")
+    description: str = Field(description="What this server does")
+    command: str = Field(description="Command to run (e.g. 'py')")
+    args: List[str] = Field(default_factory=list, description="Command arguments (may contain {templates})")
+    env_vars: Dict[str, str] = Field(default_factory=dict, description="Environment variables (may contain {templates})")
+    required_env_from_os: List[str] = Field(default_factory=list, description="API keys to resolve from os.environ")
+    category: str = Field("knowledge", description="Server category")
+
+
+class ProjectInitResult(BaseModel):
+    """Result of project initialization."""
+    servers_configured: List[str] = Field(default_factory=list, description="Servers written to .mcp.json")
+    servers_skipped: List[str] = Field(default_factory=list, description="Servers skipped (already present)")
+    missing_env_vars: Dict[str, List[str]] = Field(default_factory=dict, description="Server -> list of missing env vars")
+    settings_updated: bool = Field(False, description="Whether .claude/settings.local.json was created/updated")
+    pre_existing_servers: List[str] = Field(default_factory=list, description="Servers already in .mcp.json")
+    warnings: List[str] = Field(default_factory=list, description="Any warnings")
+
+
+class ProjectValidateResult(BaseModel):
+    """Result of project validation."""
+    has_mcp_json: bool = Field(False, description="Whether .mcp.json exists")
+    has_settings_flag: bool = Field(False, description="Whether enableAllProjectMcpServers is set")
+    healthy_servers: List[str] = Field(default_factory=list, description="Servers with valid config")
+    unhealthy_servers: Dict[str, str] = Field(default_factory=dict, description="Server -> reason unhealthy")
+    overall_healthy: bool = Field(False, description="Whether everything is healthy")
 
 
 # Forward reference resolution
