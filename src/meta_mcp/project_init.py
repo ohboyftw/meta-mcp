@@ -17,11 +17,17 @@ from .models import ProjectInitResult, ProjectServerDefinition, ProjectValidateR
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-DEFAULT_SKILLS_REPO = "D:/Home/claudeSkills/Repo"
-
-
 def _get_skills_repo() -> str:
-    return os.environ.get("CLAUDE_SKILLS_REPO", DEFAULT_SKILLS_REPO)
+    """Return the skills repo path from env var, config file, or empty string."""
+    env_val = os.environ.get("CLAUDE_SKILLS_REPO", "").strip()
+    if env_val:
+        return env_val
+    from .settings import get_settings
+
+    settings = get_settings()
+    if settings.skills_extra_dirs:
+        return str(settings.skills_extra_dirs[0])
+    return ""
 
 
 def _get_python_command() -> str:

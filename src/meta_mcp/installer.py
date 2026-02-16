@@ -61,19 +61,65 @@ class MCPInstaller:
             logger.error(f"Failed to save installation log: {e}")
 
     async def install_server(self, request: MCPInstallationRequest) -> MCPInstallationResult:
-        """Install an MCP server with the specified option."""
+        """Install an MCP server with the specified option.
+
+        When no predefined recipe exists the method tries, in order:
+        1. Auto-detect from the server's ``repository_url`` (GitHub API).
+        2. AI fallback (npm / PyPI / GitHub search via :class:`AIFallbackManager`).
+        3. Return an actionable error message.
+        """
         server_name = request.server_name
         option_name = request.option_name
         config_name = f"{server_name}-{option_name}"
-        
+
         install_command = await self._get_install_command(server_name, option_name)
+
+        # --- Phase 2a: auto-detect from repository URL ---
+        if not install_command:
+            repo_url = await self._get_server_repo_url(server_name)
+            if repo_url:
+                install_command = await self._auto_detect_from_repo(server_name, repo_url)
+                if install_command:
+                    option_name = option_name or "auto_detected"
+                    config_name = f"{server_name}-{option_name}"
+                    logger.info("Auto-detected install command for %s: %s", server_name, install_command)
+
+        # --- Phase 2b: AI fallback (npm/PyPI/GitHub search) ---
+        if not install_command:
+            try:
+                from .ai_fallback import AIFallbackManager
+
+                ai_manager = AIFallbackManager()
+                ai_result = await ai_manager.request_ai_installation(
+                    server_name=server_name,
+                    failure_reason="No predefined install recipe or repository URL",
+                    target_clients=["local_mcp_json"],
+                )
+                if ai_result.success:
+                    return MCPInstallationResult(
+                        success=True,
+                        server_name=server_name,
+                        option_name="ai_detected",
+                        config_name=server_name,
+                        message=f"AI-assisted: {ai_result.message}",
+                    )
+            except Exception as exc:
+                logger.debug("AI fallback unavailable for %s: %s", server_name, exc)
+
+        # --- No install method found — ask the user ---
         if not install_command:
             return MCPInstallationResult(
                 success=False,
                 server_name=server_name,
                 option_name=option_name,
                 config_name=config_name,
-                message=f"Unknown server or option: {server_name}.{option_name}"
+                message=(
+                    f"No install recipe for '{server_name}' and auto-detection "
+                    f"from npm/PyPI/GitHub found no match.\n"
+                    f"Please provide the install command manually (e.g. "
+                    f"'npx -y <package>' or 'uvx <package>') and I will "
+                    f"configure it for you."
+                ),
             )
 
         # Check for prerequisites if it's an npm installation
@@ -211,19 +257,6 @@ class MCPInstaller:
                     }
                 }
             },
-            "search": {
-                "brave-search": {
-                    "name": "Brave Search",
-                    "description": "Privacy-focused web search with technical content",
-                    "options": {
-                        "official": {
-                            "install": "npx -y @modelcontextprotocol/server-brave-search",
-                            "config_name": "brave-search",
-                            "env_vars": ["BRAVE_API_KEY"]
-                        }
-                    }
-                }
-            },
             "automation": {
                 "puppeteer": {
                     "name": "Puppeteer Browser Automation",
@@ -286,6 +319,97 @@ class MCPInstaller:
                     }
                 }
             },
+            "cloud": {
+                "azure-mcp": {
+                    "name": "Azure MCP Server",
+                    "description": "Consolidated Azure cloud services — AI Search, Cosmos DB, Key Vault, Storage, Compute, AKS, Functions, Service Bus, and 40+ services",
+                    "options": {
+                        "official": {
+                            "install": "npx -y @azure/mcp@latest server start",
+                            "config_name": "azure-mcp",
+                            "env_vars": ["AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET"]
+                        },
+                        "python": {
+                            "install": "uvx --from msmcp-azure azmcp server start",
+                            "config_name": "azure-mcp-python",
+                            "env_vars": ["AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET"]
+                        }
+                    }
+                },
+                "google-cloud-bigquery": {
+                    "name": "Google Cloud BigQuery",
+                    "description": "Google Cloud managed MCP for BigQuery — execute SQL, list datasets/tables, get schema info",
+                    "options": {
+                        "official": {
+                            "install": "gcloud beta services mcp enable bigquery.googleapis.com",
+                            "config_name": "google-bigquery",
+                            "env_vars": ["GOOGLE_CLOUD_PROJECT"]
+                        }
+                    }
+                },
+                "google-cloud-compute": {
+                    "name": "Google Cloud Compute Engine",
+                    "description": "Google Cloud managed MCP for GCE — instance provisioning, resizing, infrastructure automation",
+                    "options": {
+                        "official": {
+                            "install": "gcloud beta services mcp enable compute.googleapis.com",
+                            "config_name": "google-compute",
+                            "env_vars": ["GOOGLE_CLOUD_PROJECT"]
+                        }
+                    }
+                },
+                "google-cloud-gke": {
+                    "name": "Google Cloud GKE",
+                    "description": "Google Cloud managed MCP for GKE — Kubernetes operations, diagnosis, cost optimization",
+                    "options": {
+                        "official": {
+                            "install": "gcloud beta services mcp enable container.googleapis.com",
+                            "config_name": "google-gke",
+                            "env_vars": ["GOOGLE_CLOUD_PROJECT"]
+                        }
+                    }
+                }
+            },
+            "search": {
+                "brave-search": {
+                    "name": "Brave Search",
+                    "description": "Privacy-focused web search with technical content",
+                    "options": {
+                        "official": {
+                            "install": "npx -y @modelcontextprotocol/server-brave-search",
+                            "config_name": "brave-search",
+                            "env_vars": ["BRAVE_API_KEY"]
+                        }
+                    }
+                },
+                "exa-search": {
+                    "name": "Exa Search",
+                    "description": "AI-native web search and code context — web search, code examples, company research, people search, deep research agent",
+                    "options": {
+                        "official": {
+                            "install": "npx -y exa-mcp-server",
+                            "config_name": "exa-search",
+                            "env_vars": ["EXA_API_KEY"]
+                        },
+                        "remote": {
+                            "install": "npx -y mcp-remote https://mcp.exa.ai/mcp",
+                            "config_name": "exa-search-remote",
+                            "env_vars": ["EXA_API_KEY"]
+                        }
+                    }
+                },
+                "smithery": {
+                    "name": "Smithery Registry",
+                    "description": "MCP server registry and marketplace — search 1000+ servers, discover tools, generate connection URLs",
+                    "options": {
+                        "cli": {
+                            "install": "npm install -g @smithery/cli",
+                            "config_name": "smithery-cli",
+                            "env_vars": []
+                        }
+                    }
+                }
+            },
             "version_control": {
                 "github": {
                     "name": "GitHub Integration",
@@ -311,6 +435,81 @@ class MCPInstaller:
                 }
             }
         }
+
+    async def _get_server_repo_url(self, server_name: str) -> Optional[str]:
+        """Look up the server's repository URL from the discovery cache."""
+        try:
+            from .discovery import MCPDiscovery
+
+            discovery = MCPDiscovery()
+            server_info = await discovery.get_server_info(server_name)
+            if server_info and server_info.repository_url:
+                return server_info.repository_url
+        except Exception as exc:
+            logger.debug("Could not look up repo URL for %s: %s", server_name, exc)
+        return None
+
+    async def _auto_detect_from_repo(self, server_name: str, repository_url: str) -> Optional[str]:
+        """Infer an install command from a GitHub repository URL.
+
+        Checks the repo's primary language and manifest files
+        (``pyproject.toml``, ``package.json``) to produce a best-guess
+        ``uvx`` or ``npx`` command.
+        """
+        if "github.com" not in repository_url:
+            return None
+
+        try:
+            # Extract owner/repo from URL
+            from urllib.parse import urlparse
+
+            parsed = urlparse(repository_url)
+            parts = [p for p in parsed.path.strip("/").split("/") if p]
+            if len(parts) < 2:
+                return None
+            owner, repo = parts[0], parts[1]
+            api_base = f"https://api.github.com/repos/{owner}/{repo}"
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                headers: Dict[str, str] = {"Accept": "application/vnd.github.v3+json"}
+                from .settings import get_settings
+
+                token = get_settings().github_token
+                if token:
+                    headers["Authorization"] = f"token {token}"
+
+                # Check repo metadata for language
+                resp = await client.get(api_base, headers=headers)
+                if resp.status_code != 200:
+                    return None
+                repo_data = resp.json()
+                language = (repo_data.get("language") or "").lower()
+
+                # Check for pyproject.toml
+                pyproject_resp = await client.get(
+                    f"{api_base}/contents/pyproject.toml", headers=headers
+                )
+                if pyproject_resp.status_code == 200:
+                    return f"uvx --from git+https://github.com/{owner}/{repo} {server_name}"
+
+                # Check for package.json
+                pkg_resp = await client.get(
+                    f"{api_base}/contents/package.json", headers=headers
+                )
+                if pkg_resp.status_code == 200:
+                    return f"npx -y {server_name}"
+
+                # Fallback by language
+                if language == "python":
+                    return f"uvx --from git+https://github.com/{owner}/{repo} {server_name}"
+                if language in ("typescript", "javascript"):
+                    return f"npx -y {server_name}"
+
+                # Generic git fallback
+                return f"uvx --from git+https://github.com/{owner}/{repo} {server_name}"
+        except Exception as exc:
+            logger.debug("Auto-detect from repo failed for %s: %s", server_name, exc)
+        return None
 
     async def _get_install_command(self, server_name: str, option_name: str) -> Optional[str]:
         """Get installation command for a server and option."""
@@ -404,6 +603,22 @@ class MCPInstaller:
             except Exception as e:
                 logger.warning(f"README-based installation failed: {e}")
         
+        # AI-assisted fallback as last resort
+        try:
+            from .ai_fallback import AIFallbackManager
+
+            ai_manager = AIFallbackManager()
+            ai_result = await ai_manager.request_ai_installation(
+                server_name=server_name,
+                failure_reason=message,
+                target_clients=["local_mcp_json"],
+            )
+            if ai_result.success:
+                logger.info(f"AI fallback succeeded for {server_name}")
+                return True, f"AI-assisted installation succeeded: {ai_result.message}"
+        except Exception as e:
+            logger.debug(f"AI fallback unavailable or failed: {e}")
+
         # All methods failed
         return False, f"All installation methods failed. Primary error: {message}"
 
@@ -597,7 +812,9 @@ class MCPInstaller:
         
         name_lower = server_name.lower()
         
-        if any(term in name_lower for term in ["search", "brave", "google", "perplexity"]):
+        if any(term in name_lower for term in ["azure", "google-cloud", "gcloud", "aws"]):
+            return MCPServerCategory.OTHER  # cloud category maps to OTHER
+        elif any(term in name_lower for term in ["search", "brave", "exa", "perplexity", "smithery"]):
             return MCPServerCategory.SEARCH
         elif any(term in name_lower for term in ["github", "gitlab", "git"]):
             return MCPServerCategory.VERSION_CONTROL
@@ -771,6 +988,23 @@ class MCPInstaller:
                 "npm_alternatives": []
             },
             
+            # Cloud
+            "azure-mcp": {
+                "uvx_alternatives": ["uvx --from msmcp-azure azmcp server start"],
+                "npm_alternatives": ["npx -y @azure/mcp@latest server start"]
+            },
+            "exa-search": {
+                "uvx_alternatives": ["uvx exa-mcp-server"],
+                "npm_alternatives": [
+                    "npx -y exa-mcp-server",
+                    "npx -y mcp-remote https://mcp.exa.ai/mcp"
+                ]
+            },
+            "smithery": {
+                "uvx_alternatives": [],
+                "npm_alternatives": ["npx -y @smithery/cli", "npm install -g @smithery/cli"]
+            },
+
             # Common MCP servers not in our definitions
             "filesystem": {
                 "uvx_alternatives": [

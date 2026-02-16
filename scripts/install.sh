@@ -73,7 +73,7 @@ data.setdefault('mcpServers', {})
 data['mcpServers']['meta-mcp'] = {
     'type': 'stdio',
     'command': '$PYTHON',
-    'args': ['-m', 'meta_mcp', '--stdio'],
+    'args': ['-m', 'meta_mcp', '--stdio', '--gateway'],
 }
 
 config_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
@@ -81,6 +81,27 @@ print(f'Wrote meta-mcp entry to {config_path}')
 " || fail "Failed to update ~/.claude.json"
 
 info "Registration OK"
+
+# ── Step 2.5: Create default config file ─────────────────────────────────
+info "Creating default config file (if not present)..."
+
+"$PYTHON" -c "
+import sys
+from pathlib import Path
+
+config_dir = Path.home() / '.config' / 'meta-mcp'
+config_file = config_dir / 'config.toml'
+
+if config_file.exists():
+    print(f'Config already exists at {config_file} — skipping')
+    sys.exit(0)
+
+config_dir.mkdir(parents=True, exist_ok=True)
+
+from meta_mcp.settings import DEFAULT_CONFIG_TOML
+config_file.write_text(DEFAULT_CONFIG_TOML, encoding='utf-8')
+print(f'Created default config at {config_file}')
+" || warn "Could not create default config file (non-fatal)"
 
 # ── Step 3: Verify ────────────────────────────────────────────────────────
 info "Verifying meta-mcp is accessible..."

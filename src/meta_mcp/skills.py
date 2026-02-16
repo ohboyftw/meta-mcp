@@ -11,6 +11,7 @@ Skill directories:
 """
 
 import logging
+import os
 import re
 import shutil
 from datetime import datetime
@@ -37,6 +38,10 @@ logger = logging.getLogger(__name__)
 
 GLOBAL_SKILLS_DIR = Path.home() / ".claude" / "skills"
 PROJECT_SKILLS_DIR_NAME = ".claude/skills"
+
+# Extra skill directories via environment variable (path-separator-delimited).
+# Example: META_MCP_SKILLS_DIRS=D:/Home/claudeSkills;D:/Home/other-skills
+EXTRA_SKILLS_ENV_VAR = "META_MCP_SKILLS_DIRS"
 
 FRONTMATTER_DELIMITER = "---"
 
@@ -242,6 +247,15 @@ def _parse_skill_md(path: Path) -> Optional[Dict[str, Any]]:
     return frontmatter
 
 
+def _coerce_list(value: Any) -> List[str]:
+    """Coerce a value to a list of strings (handles comma-separated strings)."""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return []
+
+
 def _skill_from_frontmatter(data: Dict[str, Any], scope: SkillScope) -> AgentSkill:
     """Build an ``AgentSkill`` model from parsed frontmatter."""
     return AgentSkill(
@@ -251,10 +265,10 @@ def _skill_from_frontmatter(data: Dict[str, Any], scope: SkillScope) -> AgentSki
         source=data.get("source", "local"),
         version=data.get("version"),
         auto_invocation=not data.get("disable-model-invocation", False),
-        allowed_tools=data.get("allowed-tools", []),
+        allowed_tools=_coerce_list(data.get("allowed-tools", [])),
         scope=scope,
-        required_servers=data.get("required-servers", []),
-        tags=data.get("tags", []),
+        required_servers=_coerce_list(data.get("required-servers", [])),
+        tags=_coerce_list(data.get("tags", [])),
     )
 
 
@@ -262,6 +276,17 @@ def _resolve_project_skills_dir(project_path: Optional[str] = None) -> Path:
     """Return the project-level skills directory."""
     root = Path(project_path) if project_path else Path.cwd()
     return root / PROJECT_SKILLS_DIR_NAME
+
+
+def _resolve_extra_skills_dirs() -> List[Path]:
+    """Return extra skill directories from Settings (config file + env var).
+
+    The ``META_MCP_SKILLS_DIRS`` env var overrides the config file value
+    when set.  See :mod:`meta_mcp.settings` for details.
+    """
+    from .settings import get_settings
+
+    return list(get_settings().skills_extra_dirs)
 
 
 def _generate_frontmatter(
@@ -304,10 +329,12 @@ class SkillsManager:
         self.project_path = project_path
         self.global_dir = GLOBAL_SKILLS_DIR
         self.project_dir = _resolve_project_skills_dir(project_path)
+        self.extra_dirs = _resolve_extra_skills_dirs()
         logger.debug(
-            "SkillsManager initialised: global=%s  project=%s",
+            "SkillsManager initialised: global=%s  project=%s  extra=%s",
             self.global_dir,
             self.project_dir,
+            [str(d) for d in self.extra_dirs],
         )
 
     # ── Search ────────────────────────────────────────────────────────────
@@ -385,23 +412,27 @@ class SkillsManager:
     # ── List ──────────────────────────────────────────────────────────────
 
     def list_skills(self) -> SkillListResult:
-        """List installed skills from both global and project directories."""
+        """List installed skills from global, project, and extra directories."""
         global_skills = self._scan_directory(self.global_dir, SkillScope.GLOBAL)
         project_skills = self._scan_directory(self.project_dir, SkillScope.PROJECT)
 
-        total = len(global_skills) + len(project_skills)
-        auto_invocable = sum(
-            1 for s in global_skills + project_skills if s.auto_invocation
-        )
+        extra_skills: List[AgentSkill] = []
+        for extra_dir in self.extra_dirs:
+            extra_skills.extend(self._scan_directory(extra_dir, SkillScope.GLOBAL))
+
+        all_skills = global_skills + project_skills + extra_skills
+        total = len(all_skills)
+        auto_invocable = sum(1 for s in all_skills if s.auto_invocation)
 
         logger.info(
-            "list_skills: %d global, %d project, %d auto-invocable",
+            "list_skills: %d global, %d project, %d extra, %d auto-invocable",
             len(global_skills),
             len(project_skills),
+            len(extra_skills),
             auto_invocable,
         )
         return SkillListResult(
-            global_skills=global_skills,
+            global_skills=global_skills + extra_skills,
             project_skills=project_skills,
             total=total,
             auto_invocable=auto_invocable,
@@ -436,8 +467,10 @@ class SkillsManager:
         """Install a skill from *source*.
 
         *source* may be:
+        - A local directory path containing a SKILL.md -- the directory is
+          copied into the target scope.
         - A GitHub URL (https://github.com/...) -- the repository is cloned
-          into the skill directory.
+          into the skill directory with all assets preserved.
         - A registry name -- looked up in the built-in registry and a
           placeholder SKILL.md is created.
 
@@ -455,10 +488,14 @@ class SkillsManager:
 
         skill_dir.mkdir(parents=True, exist_ok=True)
 
+        # Detect source type: local path, GitHub URL, or registry name
+        source_path = Path(source).expanduser().resolve()
         parsed_url = urlparse(source)
         is_url = parsed_url.scheme in ("http", "https")
 
-        if is_url and "github.com" in (parsed_url.hostname or ""):
+        if source_path.is_dir():
+            self._install_from_local(source_path, skill_dir, skill_file)
+        elif is_url and "github.com" in (parsed_url.hostname or ""):
             self._install_from_github(source, skill_dir, skill_file)
         else:
             self._install_from_registry(name, source, skill_dir, skill_file)
@@ -472,31 +509,75 @@ class SkillsManager:
         logger.info("Installed skill %r (%s) at %s", name, scope.value, skill_dir)
         return skill
 
+    def _install_from_local(
+        self, source_dir: Path, skill_dir: Path, skill_file: Path
+    ) -> None:
+        """Copy a local skill directory into *skill_dir*.
+
+        All contents (SKILL.md, scripts, assets) are copied so that
+        relative-path references in the skill instructions keep working.
+        """
+        source_skill = source_dir / "SKILL.md"
+        if not source_skill.is_file():
+            raise RuntimeError(
+                f"Local path {source_dir} does not contain a SKILL.md"
+            )
+
+        # Copy all contents from source into skill_dir
+        for item in source_dir.iterdir():
+            dest = skill_dir / item.name
+            if dest.exists():
+                if dest.is_dir():
+                    shutil.rmtree(str(dest))
+                else:
+                    dest.unlink()
+            if item.is_dir():
+                shutil.copytree(str(item), str(dest))
+            else:
+                shutil.copy2(str(item), str(dest))
+
+        logger.info("Copied local skill from %s to %s", source_dir, skill_dir)
+
     def _install_from_github(
         self, url: str, skill_dir: Path, skill_file: Path
     ) -> None:
-        """Clone a GitHub repository into *skill_dir*.
+        """Clone a GitHub repository directly into *skill_dir*.
 
-        If the repository already contains a SKILL.md at the root, it is
-        kept.  Otherwise a minimal one is generated from the repo metadata.
+        All repo contents (scripts, assets, configs) are preserved so that
+        SKILL.md instructions referencing relative paths keep working.
+        If the repo lacks a SKILL.md, one is generated from the README.
         """
         try:
             import git  # GitPython
 
-            # Clone into a temporary sub-directory, then move artefacts
-            clone_target = skill_dir / "_repo"
-            if clone_target.exists():
-                shutil.rmtree(clone_target)
+            # Clone into a temp location, then move everything into skill_dir
+            import tempfile
 
-            logger.info("Cloning %s into %s", url, clone_target)
-            repo = git.Repo.clone_from(url, str(clone_target), depth=1)
+            with tempfile.TemporaryDirectory() as tmp:
+                clone_target = Path(tmp) / "repo"
+                logger.info("Cloning %s", url)
+                git.Repo.clone_from(url, str(clone_target), depth=1)
 
-            # If the repo ships a SKILL.md, use it
-            repo_skill = clone_target / "SKILL.md"
-            if repo_skill.is_file():
-                shutil.copy2(str(repo_skill), str(skill_file))
-            else:
-                # Generate a SKILL.md from what we know
+                # Remove .git to save space — we don't need history
+                git_dir = clone_target / ".git"
+                if git_dir.exists():
+                    shutil.rmtree(str(git_dir), ignore_errors=True)
+
+                # Copy all repo contents into skill_dir
+                for item in clone_target.iterdir():
+                    dest = skill_dir / item.name
+                    if dest.exists():
+                        if dest.is_dir():
+                            shutil.rmtree(str(dest))
+                        else:
+                            dest.unlink()
+                    if item.is_dir():
+                        shutil.copytree(str(item), str(dest))
+                    else:
+                        shutil.copy2(str(item), str(dest))
+
+            # If the repo didn't ship a SKILL.md, generate one
+            if not skill_file.is_file():
                 repo_name = Path(urlparse(url).path).stem
                 content = _generate_frontmatter(
                     name=repo_name,
@@ -504,7 +585,7 @@ class SkillsManager:
                     allowed_tools=["Bash", "Read"],
                     tags=["community", "github"],
                 )
-                readme_path = clone_target / "README.md"
+                readme_path = skill_dir / "README.md"
                 body = ""
                 if readme_path.is_file():
                     try:
@@ -516,9 +597,6 @@ class SkillsManager:
                 skill_file.write_text(
                     f"{content}\n\n{body}\n", encoding="utf-8"
                 )
-
-            # Clean up the bare clone to save space (keep SKILL.md only)
-            shutil.rmtree(str(clone_target), ignore_errors=True)
 
         except ImportError:
             logger.error("GitPython is required to install skills from GitHub URLs")

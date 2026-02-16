@@ -139,6 +139,165 @@ Meta MCP can detect and write configuration for:
 
 Use `detect_clients` to see what's installed, and `sync_configurations` to keep them in lockstep.
 
+## Configuration
+
+Meta MCP reads settings from a TOML config file, with environment variable overrides for backward compatibility.
+
+### Config file location
+
+| Platform | Path |
+|----------|------|
+| Linux / macOS | `~/.config/meta-mcp/config.toml` |
+| Windows | `%APPDATA%\meta-mcp\config.toml` |
+
+The install scripts create a default config file automatically. You can also create one manually.
+
+### Config file reference
+
+```toml
+# ~/.config/meta-mcp/config.toml
+
+[registry]
+# Extra directories containing server definitions (.mcp.json, servers.json, or per-server .json)
+extra_dirs = ["~/my-servers", "~/team-servers"]
+
+[skills]
+# Extra directories containing SKILL.md skill folders
+extra_dirs = ["~/claudeSkills/Repo"]
+
+[github]
+# GitHub token for higher API rate limits during discovery
+token = "ghp_..."
+
+[install]
+# Default target clients for install_mcp_server
+default_clients = ["claude_code"]
+```
+
+### Environment variable overrides
+
+Environment variables take priority over the config file when set:
+
+| Env var | Overrides | Format |
+|---------|-----------|--------|
+| `META_MCP_REGISTRY_DIRS` | `registry.extra_dirs` | Path-separator-delimited list (`;` on Windows, `:` on POSIX) |
+| `META_MCP_SKILLS_DIRS` | `skills.extra_dirs` | Path-separator-delimited list |
+| `GITHUB_TOKEN` | `github.token` | Token string |
+| `CLAUDE_SKILLS_REPO` | First entry of `skills.extra_dirs` (used by `project_init`) | Single path |
+
+### Transport modes
+
+| Flag | Description |
+|------|-------------|
+| `--stdio` | (Default) Stdio transport for Claude Code / Claude Desktop |
+| `--http` | HTTP/SSE transport for remote or multi-client access |
+| `--gateway` | Gateway mode — exposes all 35 tools |
+
+Example registration (user scope):
+```bash
+claude mcp add -s user meta-mcp -- python -m meta_mcp --stdio --gateway
+```
+
+## Extending the Registry
+
+Meta MCP discovers servers from online registries (Official MCP Registry, Smithery, mcp.so) **and** from local directories you configure.
+
+### Adding a local server catalog
+
+1. Set `registry.extra_dirs` in your config file (or `META_MCP_REGISTRY_DIRS` env var) to include your directory.
+
+2. Place server definitions in that directory using any of these formats:
+
+**Option A — `.mcp.json` or `servers.json` (mcpServers format):**
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "uvx",
+      "args": ["my-server"],
+      "description": "My custom MCP server"
+    }
+  }
+}
+```
+
+**Option B — Standalone per-server JSON files (`my-server.json`):**
+```json
+{
+  "name": "my-server",
+  "description": "My custom MCP server",
+  "repository_url": "https://github.com/me/my-server",
+  "install_command": "uvx my-server"
+}
+```
+
+3. Run `search_mcp_servers` — your servers will appear in results.
+
+### Auto-detect install
+
+When `install_mcp_server` is called for a server with no predefined recipe:
+
+1. **Repository auto-detect** — if the server has a `repository_url`, meta-mcp checks the GitHub repo for `pyproject.toml` or `package.json` to infer `uvx` or `npx` commands.
+2. **AI fallback** — searches npm, PyPI, and GitHub for matching packages.
+3. **Ask the user** — if nothing works, returns a message asking for the manual install command.
+
+## Custom Skills
+
+Skills are reusable SKILL.md files that encode workflows, procedures, and domain knowledge for Claude Code.
+
+### Skill directories
+
+| Scope | Location | Notes |
+|-------|----------|-------|
+| Global | `~/.claude/skills/` | Available in all projects |
+| Project | `.claude/skills/` (relative to project root) | Project-specific |
+| Extra | Configured via `skills.extra_dirs` or `META_MCP_SKILLS_DIRS` | Additional directories |
+
+### SKILL.md format
+
+Each skill lives in its own directory with a `SKILL.md` file:
+
+```
+my-skill/
+  SKILL.md
+  helper-script.py   # optional supporting files
+```
+
+The `SKILL.md` uses YAML frontmatter:
+
+```markdown
+---
+name: my-skill
+description: What this skill does
+version: 1.0.0
+disable-model-invocation: false
+allowed-tools:
+  - Bash
+  - Read
+tags:
+  - automation
+  - deployment
+required-servers:
+  - github
+---
+
+# My Skill
+
+Instructions for Claude to follow when this skill is invoked...
+```
+
+### Frontmatter fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Skill identifier |
+| `description` | string | Human-readable description |
+| `version` | string | Semver version |
+| `disable-model-invocation` | bool | If true, skill won't be auto-invoked |
+| `allowed-tools` | list | Tools this skill may use |
+| `tags` | list | Searchable tags |
+| `required-servers` | list | MCP servers this skill depends on |
+
 ## Architecture
 
 ```
@@ -146,6 +305,7 @@ src/meta_mcp/
   server.py        # FastMCP server — registers all 35 tools
   tools.py         # Tool implementations (Tool.apply() -> str)
   tools_base.py    # Base class with auto-naming and schema extraction
+  settings.py      # Central config file reader (~/.config/meta-mcp/config.toml)
   installer.py     # Install/uninstall with fallback chains + AI fallback
   config.py        # Per-client config read/write/validate
   clients.py       # Multi-client detection, drift sync (R6)

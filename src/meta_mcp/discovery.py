@@ -31,6 +31,10 @@ class MCPDiscovery:
     """Discovers MCP servers from various sources."""
     
     def __init__(self, github_token: Optional[str] = None):
+        if github_token is None:
+            from .settings import get_settings
+
+            github_token = get_settings().github_token or None
         self.github_token = github_token
         self.client = httpx.AsyncClient(
             timeout=30.0,
@@ -134,6 +138,7 @@ class MCPDiscovery:
             self._discover_from_github_search(),
             self._discover_from_curated_list(),
             self._discover_from_claudelog(),
+            self._discover_from_local_config(),
         ]
         
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -471,6 +476,59 @@ class MCPDiscovery:
         except Exception as e:
             logger.warning(f"Failed to discover from ClaudeLog: {e}")
         
+        return servers
+
+    async def _discover_from_local_config(self) -> Dict[str, MCPServerWithOptions]:
+        """Discover servers from local Claude Code config files.
+
+        Reads ``~/.claude.json`` (user-scope), project ``.mcp.json``, and any
+        directories listed in the ``META_MCP_REGISTRY_DIRS`` environment
+        variable.  This ensures that manually configured servers (not in any
+        public registry) appear in search results.
+        """
+        from .registry import _collect_local_servers
+
+        servers: Dict[str, MCPServerWithOptions] = {}
+        try:
+            local_entries = _collect_local_servers()
+            for entry in local_entries:
+                name = entry.get("name", "")
+                if not name or name in servers:
+                    continue
+                desc = entry.get("description", f"Locally configured: {name}")
+                category = self._categorize_server(name, desc)
+                keywords = self._extract_keywords(name, desc)
+
+                options: list = []
+                cmd = entry.get("install_command")
+                if cmd:
+                    options.append(MCPServerOption(
+                        name="local",
+                        display_name="Local Config",
+                        description="From local configuration",
+                        install_command=cmd,
+                        config_name=name,
+                        env_vars=entry.get("env_vars", []),
+                        repository_url=entry.get("repository_url"),
+                        recommended=True,
+                    ))
+
+                servers[name] = MCPServerWithOptions(
+                    name=name,
+                    display_name=name.replace("-", " ").replace("_", " ").title(),
+                    description=desc,
+                    category=category,
+                    repository_url=entry.get("repository_url"),
+                    documentation_url=entry.get("documentation_url"),
+                    author="Local Config",
+                    keywords=keywords,
+                    options=options,
+                )
+
+            logger.info("Discovered %d servers from local config", len(servers))
+        except Exception as e:
+            logger.warning("Failed to discover from local config: %s", e)
+
         return servers
 
     def _filter_servers(self, query: MCPSearchQuery) -> List[MCPServerWithOptions]:

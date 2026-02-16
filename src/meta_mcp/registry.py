@@ -3,13 +3,17 @@ Registry Federation for Meta MCP Server (R5).
 
 Searches across multiple MCP registries in parallel, deduplicates results,
 and computes trust scores for each discovered server.  Supports the Official
-MCP Registry, Smithery, and mcp.so as federated sources.
+MCP Registry, Smithery, mcp.so, and locally configured servers as federated
+sources.
 """
 
 import asyncio
+import json
 import logging
+import os
 import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -38,8 +42,13 @@ _SOURCE_MULTIPLIERS: Dict[str, int] = {
     "awesome_list": 20,
     "github": 15,
     "mcp_so": 15,
+    "local_config": 10,
     "unknown": 5,
 }
+
+# Extra local registry directories via environment variable (path-separator-delimited).
+# Example: META_MCP_REGISTRY_DIRS=D:/Home/my-servers;D:/Home/team-servers
+EXTRA_REGISTRY_ENV_VAR = "META_MCP_REGISTRY_DIRS"
 
 _MULTI_SOURCE_BONUS = 10  # per additional source beyond the first
 
@@ -232,6 +241,176 @@ class _McpSoAdapter(_RegistryAdapter):
 
 
 # ---------------------------------------------------------------------------
+# Local config adapter — reads locally configured MCP servers
+# ---------------------------------------------------------------------------
+
+def _resolve_local_registry_dirs() -> List[Path]:
+    """Return extra registry directories from Settings (config file + env var).
+
+    The ``META_MCP_REGISTRY_DIRS`` env var overrides the config file value
+    when set.  See :mod:`meta_mcp.settings` for details.
+    """
+    from .settings import get_settings
+
+    return list(get_settings().registry_extra_dirs)
+
+
+def _read_json_safe(path: Path) -> Dict[str, Any]:
+    """Read a JSON file, returning ``{}`` on any error."""
+    try:
+        if path.is_file():
+            return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.debug("Failed to read JSON from %s", path)
+    return {}
+
+
+def _collect_local_servers() -> List[Dict[str, Any]]:
+    """Gather MCP server entries from all local config sources.
+
+    Sources (in order):
+    1. ``~/.claude.json`` — Claude Code user-scope config
+    2. ``.mcp.json`` — project-scope config (walk cwd upward)
+    3. Directories listed in ``META_MCP_REGISTRY_DIRS``
+       (each may contain ``.mcp.json`` or ``servers.json`` catalog files)
+    """
+    results: List[Dict[str, Any]] = []
+
+    # 1. Claude Code user-scope config (~/.claude.json)
+    user_config = Path.home() / ".claude.json"
+    _extract_servers_from_config(user_config, results, "claude_code_user")
+
+    # 2. Project-scope .mcp.json (walk upward from cwd)
+    project_config = _find_project_mcp_json()
+    if project_config is not None:
+        _extract_servers_from_config(project_config, results, "project_config")
+
+    # 3. Extra registry dirs from env var
+    for reg_dir in _resolve_local_registry_dirs():
+        for filename in (".mcp.json", "servers.json", "mcp.json"):
+            candidate = reg_dir / filename
+            _extract_servers_from_config(candidate, results, "local_registry")
+        # Also scan for per-server JSON files in the directory
+        for json_file in sorted(reg_dir.glob("*.json")):
+            if json_file.name in (".mcp.json", "servers.json", "mcp.json"):
+                continue  # already handled above
+            _extract_server_definition(json_file, results)
+
+    return results
+
+
+def _find_project_mcp_json() -> Optional[Path]:
+    """Walk from cwd upward looking for ``.mcp.json``."""
+    try:
+        current = Path.cwd()
+    except OSError:
+        return None
+    for directory in [current, *current.parents]:
+        candidate = directory / ".mcp.json"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _extract_servers_from_config(
+    path: Path, out: List[Dict[str, Any]], source_tag: str,
+) -> None:
+    """Extract server entries from an ``mcpServers`` config file into *out*."""
+    data = _read_json_safe(path)
+    mcp_servers = data.get("mcpServers", {})
+    for name, config in mcp_servers.items():
+        desc = config.get("description", "")
+        if not desc:
+            # Derive a description from the command/args if available
+            cmd = config.get("command", "")
+            args = config.get("args", [])
+            if cmd:
+                desc = f"Local MCP server ({cmd})"
+                if args:
+                    # Use last meaningful arg for context
+                    meaningful = [a for a in args if not a.startswith("-")]
+                    if meaningful:
+                        desc = f"Local MCP server: {meaningful[-1]}"
+        out.append({
+            "name": name,
+            "description": desc or f"Locally configured MCP server: {name}",
+            "source": source_tag,
+            "category": None,
+            "repository_url": config.get("repository_url"),
+            "documentation_url": config.get("documentation_url"),
+            "stars": None,
+            "updated_at": None,
+            "has_security_scan": False,
+            "env_vars": list(config.get("env", {}).keys()) if config.get("env") else [],
+            "install_command": None,
+        })
+
+
+def _extract_server_definition(path: Path, out: List[Dict[str, Any]]) -> None:
+    """Extract a single server definition from a standalone JSON file.
+
+    Expected format::
+
+        {
+            "name": "my-server",
+            "description": "What it does",
+            "command": "uvx my-server",
+            ...
+        }
+    """
+    data = _read_json_safe(path)
+    name = data.get("name", path.stem)
+    if not name:
+        return
+    out.append({
+        "name": name,
+        "description": data.get("description", f"Local server: {name}"),
+        "source": "local_registry",
+        "category": data.get("category"),
+        "repository_url": data.get("repository_url"),
+        "documentation_url": data.get("documentation_url"),
+        "stars": data.get("stars"),
+        "updated_at": data.get("updated_at"),
+        "has_security_scan": data.get("has_security_scan", False),
+        "env_vars": data.get("env_vars", []),
+        "install_command": data.get("install_command"),
+    })
+
+
+class _LocalConfigAdapter(_RegistryAdapter):
+    """Adapter that reads locally configured MCP servers.
+
+    Searches ``~/.claude.json``, project ``.mcp.json``, and any directories
+    listed in the ``META_MCP_REGISTRY_DIRS`` environment variable.  This
+    allows ``search_federated`` to discover servers that were manually
+    configured and not installed via any public registry.
+    """
+
+    name = "local_config"
+    url = "local"
+
+    async def search(self, query: str) -> List[Dict[str, Any]]:
+        local_servers = _collect_local_servers()
+        if not query:
+            return local_servers
+
+        query_lower = query.lower()
+        query_terms = query_lower.split()
+
+        matched: List[Dict[str, Any]] = []
+        for entry in local_servers:
+            searchable = f"{entry.get('name', '')} {entry.get('description', '')}".lower()
+            # Match if ANY query term appears in the server name or description
+            if any(term in searchable for term in query_terms):
+                matched.append(entry)
+        return matched
+
+    async def ping(self) -> bool:
+        # Local config is always "available"
+        return True
+
+
+# ---------------------------------------------------------------------------
 # Trust-score computation
 # ---------------------------------------------------------------------------
 
@@ -355,6 +534,7 @@ class RegistryFederation:
             _OfficialRegistryAdapter(self._client),
             _SmitheryAdapter(self._client),
             _McpSoAdapter(self._client),
+            _LocalConfigAdapter(self._client),
         ]
 
     # -- context manager ------------------------------------------------------
@@ -481,7 +661,7 @@ class RegistryFederation:
     @staticmethod
     def _merge_entries(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Merge multiple registry entries, preferring higher-trust sources."""
-        priority = {"official_registry": 0, "smithery": 1, "mcp_so": 2, "unknown": 3}
+        priority = {"official_registry": 0, "smithery": 1, "mcp_so": 2, "local_config": 3, "unknown": 4}
         ranked = sorted(entries, key=lambda e: priority.get(e.get("source", "unknown"), 99))
         all_keys = {k for e in entries for k in e}
         merged: Dict[str, Any] = {}

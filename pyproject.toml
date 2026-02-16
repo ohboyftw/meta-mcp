@@ -20,6 +20,7 @@ dependencies = [
     "jinja2>=3.1.0",
     "packaging>=21.0",
     "semantic-version>=2.10.0",
+    "tomli>=2.0.0; python_version < '3.11'",
 ]
 requires-python = ">=3.10"
 readme = "README.md"
@@ -55,6 +56,9 @@ target-version = ['py310']
 target-version = "py310"
 line-length = 88
 select = ["E4", "E7", "E9", "F", "W"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
 [tool.mypy]
 python_version = "3.10"

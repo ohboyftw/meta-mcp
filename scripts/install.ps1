@@ -74,7 +74,7 @@ data.setdefault("mcpServers", {})
 data["mcpServers"]["meta-mcp"] = {
     "type": "stdio",
     "command": "$Python",
-    "args": ["-m", "meta_mcp", "--stdio"],
+    "args": ["-m", "meta_mcp", "--stdio", "--gateway"],
 }
 
 config_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -84,6 +84,31 @@ print(f"Wrote meta-mcp entry to {config_path}")
 & $Python -c $RegisterScript
 if ($LASTEXITCODE -ne 0) { Write-Fail "Failed to update ~/.claude.json" }
 Write-Info "Registration OK"
+
+# ── Step 2.5: Create default config file ─────────────────────────────────
+Write-Info "Creating default config file (if not present)..."
+
+$ConfigScript = @'
+import os, sys
+from pathlib import Path
+
+appdata = os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming"))
+config_dir = Path(appdata) / "meta-mcp"
+config_file = config_dir / "config.toml"
+
+if config_file.exists():
+    print(f"Config already exists at {config_file} — skipping")
+    sys.exit(0)
+
+config_dir.mkdir(parents=True, exist_ok=True)
+
+from meta_mcp.settings import DEFAULT_CONFIG_TOML
+config_file.write_text(DEFAULT_CONFIG_TOML, encoding="utf-8")
+print(f"Created default config at {config_file}")
+'@
+
+& $Python -c $ConfigScript
+if ($LASTEXITCODE -ne 0) { Write-Warn "Could not create default config file (non-fatal)" }
 
 # ── Step 3: Verify ────────────────────────────────────────────────────────
 Write-Info "Verifying meta-mcp is accessible..."
