@@ -86,6 +86,12 @@ class MCPInstaller:
             if local_result is not None:
                 return local_result
 
+        # --- Phase 1c: check if server exists as a skill with MCP entry point ---
+        if not install_command:
+            skill_result = await self._install_from_skill_dir(request)
+            if skill_result is not None:
+                return skill_result
+
         # --- Phase 2a: auto-detect from repository URL ---
         if not install_command:
             repo_url = await self._get_server_repo_url(server_name)
@@ -96,47 +102,42 @@ class MCPInstaller:
                     config_name = f"{server_name}-{option_name}"
                     logger.info("Auto-detected install command for %s: %s", server_name, install_command)
 
-        # --- Phase 2b: AI fallback — discover install command from npm/PyPI/GitHub ---
+        # --- Phase 2b: AI fallback — ONLY if server is known but has no recipe ---
         if not install_command:
-            try:
-                from .ai_fallback import AIFallbackManager
-                from .models import AIInstallationRequest
+            server_info = await self._get_server_info_cached(server_name)
+            if server_info is not None:
+                # Server is known (in registry/discovery) but has no recipe — try AI
+                try:
+                    from .ai_fallback import AIFallbackManager
+                    from .models import AIInstallationRequest
 
-                ai_manager = AIFallbackManager()
-                ai_request = AIInstallationRequest(
-                    server_name=server_name,
-                    reason="No predefined install recipe",
-                    clients=["local_mcp_json"],
-                )
-                await ai_manager._generate_ai_suggestions(ai_request)
-                if ai_request.suggested_command:
-                    install_command = ai_request.suggested_command
-                    option_name = "ai_detected"
-                    config_name = f"{server_name}-{option_name}"
-                    logger.info(
-                        "AI fallback discovered install command for %s: %s",
-                        server_name, install_command,
+                    ai_manager = AIFallbackManager()
+                    ai_request = AIInstallationRequest(
+                        server_name=server_name,
+                        reason="No predefined install recipe",
+                        clients=["local_mcp_json"],
                     )
-            except Exception as exc:
-                logger.debug("AI fallback unavailable for %s: %s", server_name, exc)
+                    await ai_manager._generate_ai_suggestions(ai_request)
+                    if ai_request.suggested_command:
+                        install_command = ai_request.suggested_command
+                        option_name = "ai_detected"
+                        config_name = f"{server_name}-{option_name}"
+                        logger.info(
+                            "AI fallback discovered install command for %s: %s",
+                            server_name, install_command,
+                        )
+                except Exception as exc:
+                    logger.debug("AI fallback unavailable for %s: %s", server_name, exc)
+            else:
+                logger.info(
+                    "Skipping AI fallback for '%s': server is completely unknown "
+                    "(not in any registry or discovery source)",
+                    server_name,
+                )
 
-        # --- No install method found — ask the user ---
+        # --- No install method found — actionable error ---
         if not install_command:
-            return MCPInstallationResult(
-                success=False,
-                server_name=server_name,
-                option_name=option_name,
-                config_name=config_name,
-                message=(
-                    f"No install recipe for '{server_name}' and auto-detection "
-                    f"found no match.\n\n"
-                    f"**Options:**\n"
-                    f"- If the server source is on disk, call again with "
-                    f"`source_path=\"/path/to/server\"`\n"
-                    f"- Or provide the install command manually (e.g. "
-                    f"'npx -y <package>' or 'uvx <package>')"
-                ),
-            )
+            return self._build_not_found_result(server_name, option_name, config_name)
 
         # Check for prerequisites if it's an npm installation
         if install_command.startswith("npm") or install_command.startswith("npx"):
@@ -677,6 +678,152 @@ class MCPInstaller:
                 f"Command: `{cmd_str}`\n"
                 f"{config_message}"
             ),
+        )
+
+    async def _install_from_skill_dir(
+        self, request: MCPInstallationRequest,
+    ) -> Optional[MCPInstallationResult]:
+        """Check if the server exists as a skill with an MCP server entry point.
+
+        Searches the ``SkillsManager`` for a skill matching *server_name*.
+        If the skill directory contains ``mcp_server.py`` or ``pyproject.toml``,
+        delegates to ``_install_from_local_path()`` with the skill's directory.
+
+        Returns ``None`` if no matching skill-with-server is found.
+        """
+        from .skills import SkillsManager
+
+        server_name = request.server_name
+        sm = SkillsManager()
+        skill_result = sm.list_skills()
+        all_skills = skill_result.global_skills + skill_result.project_skills
+
+        for skill in all_skills:
+            if skill.name == server_name and skill.path:
+                skill_dir = Path(skill.path).parent
+                # Check for MCP server entry points in the skill directory
+                has_server = any(
+                    (skill_dir / candidate).is_file()
+                    for candidate in ("mcp_server.py", "pyproject.toml", "server.py")
+                )
+                if has_server:
+                    logger.info(
+                        "Found skill '%s' with MCP server at %s — installing from skill dir",
+                        server_name, skill_dir,
+                    )
+                    # Delegate to local-path installer
+                    patched = MCPInstallationRequest(
+                        server_name=server_name,
+                        option_name="skill_dir",
+                        source_path=str(skill_dir),
+                        auto_configure=request.auto_configure,
+                        env_vars=request.env_vars,
+                    )
+                    return await self._install_from_local_path(patched)
+
+        return None
+
+    async def _get_server_info_cached(self, server_name: str) -> Optional[MCPServerInfo]:
+        """Check if *server_name* is known in any registry or discovery source.
+
+        Returns an ``MCPServerInfo`` if the server appears in the discovery
+        cache or the local registry.  Returns ``None`` when the server is
+        completely unknown.
+        """
+        from .models import MCPServerCategory
+
+        # Check discovery cache first
+        try:
+            from .discovery import MCPDiscovery
+
+            discovery = MCPDiscovery()
+            info = await discovery.get_server_info(server_name)
+            if info is not None:
+                return info
+        except Exception as exc:
+            logger.debug("Discovery lookup failed for %s: %s", server_name, exc)
+
+        # Check local registry entries (servers.json, .mcp.json, etc.)
+        try:
+            from .registry import _collect_local_servers
+
+            for entry in _collect_local_servers():
+                if entry.get("name") == server_name:
+                    return MCPServerInfo(
+                        name=server_name,
+                        display_name=server_name.replace("-", " ").title(),
+                        description=entry.get("description", ""),
+                        category=MCPServerCategory.OTHER,
+                    )
+        except Exception as exc:
+            logger.debug("Local registry lookup failed for %s: %s", server_name, exc)
+
+        return None
+
+    def _build_not_found_result(
+        self,
+        server_name: str,
+        option_name: str,
+        config_name: str,
+    ) -> MCPInstallationResult:
+        """Build an actionable error when all install phases fail."""
+        # Check if the server exists as a skill (for a more helpful message)
+        from .skills import SkillsManager
+
+        sm = SkillsManager()
+        skill_result = sm.list_skills()
+        all_skills = skill_result.global_skills + skill_result.project_skills
+        skill_match = next((s for s in all_skills if s.name == server_name), None)
+
+        # Check if the server exists in local registry (without command)
+        from .registry import _collect_local_servers
+
+        local_match = next(
+            (e for e in _collect_local_servers() if e.get("name") == server_name),
+            None,
+        )
+
+        parts: List[str] = [
+            f"No install recipe for '{server_name}' and auto-detection found no match.",
+            "",
+        ]
+
+        if skill_match and skill_match.path:
+            skill_dir = Path(skill_match.path).parent
+            parts.append(
+                f"**Found as skill** at `{skill_dir}`, but no MCP server entry "
+                f"point detected. If this skill has a server, call again with "
+                f"`source_path=\"{skill_dir}\"`."
+            )
+        elif local_match:
+            desc = local_match.get("description", "")
+            repo = local_match.get("repository_url", "")
+            parts.append(
+                f"**Found in local registry** (description: {desc})"
+                + (f", repo: {repo}" if repo else "")
+                + ". The entry has no install command. Provide `source_path` "
+                "pointing to the server's source directory, or add a `command` "
+                "field to the registry entry."
+            )
+        else:
+            parts.append(
+                "**Server is completely unknown.** Try `search_federated` "
+                f"or `search_capabilities` first to find '{server_name}'."
+            )
+
+        parts.extend([
+            "",
+            "**Other options:**",
+            "- Call again with `source_path=\"/path/to/server\"` if you have the source.",
+            "- Provide the install command manually (e.g. `npx -y <pkg>` or `uvx <pkg>`).",
+        ])
+
+        return MCPInstallationResult(
+            success=False,
+            server_name=server_name,
+            option_name=option_name,
+            config_name=config_name,
+            message="\n".join(parts),
         )
 
     def _detect_python_entry(self, source: Path, server_name: str) -> Optional[str]:

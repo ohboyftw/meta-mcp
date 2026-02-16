@@ -186,7 +186,8 @@ class TestListSkills:
 
     def test_list_with_no_dirs(self, tmp_path):
         mgr = SkillsManager(project_path=str(tmp_path))
-        with patch.object(mgr, "global_dir", tmp_path / "global"):
+        with patch.object(mgr, "global_dir", tmp_path / "global"), \
+             patch.object(mgr, "extra_dirs", []):
             result = mgr.list_skills()
         assert result.total == 0
 
