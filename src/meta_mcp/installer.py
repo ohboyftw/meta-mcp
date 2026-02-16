@@ -63,14 +63,20 @@ class MCPInstaller:
     async def install_server(self, request: MCPInstallationRequest) -> MCPInstallationResult:
         """Install an MCP server with the specified option.
 
-        When no predefined recipe exists the method tries, in order:
-        1. Auto-detect from the server's ``repository_url`` (GitHub API).
-        2. AI fallback (npm / PyPI / GitHub search via :class:`AIFallbackManager`).
-        3. Return an actionable error message.
+        Resolution order:
+        0. Local source path (if ``source_path`` is provided).
+        1. Predefined recipe from server definitions catalog.
+        2. Auto-detect from the server's ``repository_url`` (GitHub API).
+        3. AI fallback (npm / PyPI / GitHub search).
+        4. Return an actionable error message asking the user.
         """
         server_name = request.server_name
         option_name = request.option_name
         config_name = f"{server_name}-{option_name}"
+
+        # --- Phase 0: local source path (code on disk) ---
+        if request.source_path:
+            return await self._install_from_local_path(request)
 
         install_command = await self._get_install_command(server_name, option_name)
 
@@ -84,24 +90,26 @@ class MCPInstaller:
                     config_name = f"{server_name}-{option_name}"
                     logger.info("Auto-detected install command for %s: %s", server_name, install_command)
 
-        # --- Phase 2b: AI fallback (npm/PyPI/GitHub search) ---
+        # --- Phase 2b: AI fallback — discover install command from npm/PyPI/GitHub ---
         if not install_command:
             try:
                 from .ai_fallback import AIFallbackManager
+                from .models import AIInstallationRequest
 
                 ai_manager = AIFallbackManager()
-                ai_result = await ai_manager.request_ai_installation(
+                ai_request = AIInstallationRequest(
                     server_name=server_name,
-                    failure_reason="No predefined install recipe or repository URL",
-                    target_clients=["local_mcp_json"],
+                    reason="No predefined install recipe",
+                    clients=["local_mcp_json"],
                 )
-                if ai_result.success:
-                    return MCPInstallationResult(
-                        success=True,
-                        server_name=server_name,
-                        option_name="ai_detected",
-                        config_name=server_name,
-                        message=f"AI-assisted: {ai_result.message}",
+                await ai_manager._generate_ai_suggestions(ai_request)
+                if ai_request.suggested_command:
+                    install_command = ai_request.suggested_command
+                    option_name = "ai_detected"
+                    config_name = f"{server_name}-{option_name}"
+                    logger.info(
+                        "AI fallback discovered install command for %s: %s",
+                        server_name, install_command,
                     )
             except Exception as exc:
                 logger.debug("AI fallback unavailable for %s: %s", server_name, exc)
@@ -115,10 +123,12 @@ class MCPInstaller:
                 config_name=config_name,
                 message=(
                     f"No install recipe for '{server_name}' and auto-detection "
-                    f"from npm/PyPI/GitHub found no match.\n"
-                    f"Please provide the install command manually (e.g. "
-                    f"'npx -y <package>' or 'uvx <package>') and I will "
-                    f"configure it for you."
+                    f"found no match.\n\n"
+                    f"**Options:**\n"
+                    f"- If the server source is on disk, call again with "
+                    f"`source_path=\"/path/to/server\"`\n"
+                    f"- Or provide the install command manually (e.g. "
+                    f"'npx -y <package>' or 'uvx <package>')"
                 ),
             )
 
@@ -435,6 +445,182 @@ class MCPInstaller:
                 }
             }
         }
+
+    async def _install_from_local_path(self, request: MCPInstallationRequest) -> MCPInstallationResult:
+        """Install an MCP server from source code on disk.
+
+        Inspects the directory for ``pyproject.toml`` or ``package.json`` to
+        determine the entry point, then writes a config entry to ``.mcp.json``
+        or ``~/.claude.json``.
+        """
+        import platform as _platform
+
+        server_name = request.server_name
+        source = Path(request.source_path).expanduser().resolve()
+
+        if not source.is_dir():
+            return MCPInstallationResult(
+                success=False,
+                server_name=server_name,
+                option_name="local",
+                config_name=server_name,
+                message=f"Source path does not exist or is not a directory: {source}",
+            )
+
+        command: Optional[str] = None
+        args: List[str] = []
+        detected_via = ""
+
+        # --- Python project ---
+        pyproject = source / "pyproject.toml"
+        setup_py = source / "setup.py"
+        if pyproject.is_file() or setup_py.is_file():
+            py_cmd = "py" if _platform.system() == "Windows" else "python3"
+            # Try to find a module name from pyproject.toml [project.scripts]
+            module_name = self._detect_python_entry(source, server_name)
+            if module_name:
+                command = py_cmd
+                args = ["-m", module_name]
+                detected_via = f"pyproject.toml (module: {module_name})"
+            else:
+                # Fallback: look for common entry point files
+                for candidate in ("server.py", "mcp_server.py", "main.py", "__main__.py"):
+                    entry = source / candidate
+                    if entry.is_file():
+                        command = py_cmd
+                        args = [str(entry)]
+                        detected_via = f"entry point: {candidate}"
+                        break
+                # Last resort: assume module matching server name
+                if not command:
+                    command = py_cmd
+                    args = ["-m", server_name.replace("-", "_")]
+                    detected_via = f"inferred module: {server_name.replace('-', '_')}"
+
+        # --- Node project ---
+        package_json = source / "package.json"
+        if not command and package_json.is_file():
+            try:
+                pkg_data = json.loads(package_json.read_text(encoding="utf-8"))
+                pkg_name = pkg_data.get("name", server_name)
+                # Check for bin entry
+                pkg_bin = pkg_data.get("bin")
+                if isinstance(pkg_bin, str):
+                    command = "node"
+                    args = [str(source / pkg_bin)]
+                    detected_via = f"package.json bin: {pkg_bin}"
+                elif isinstance(pkg_bin, dict) and pkg_bin:
+                    first_bin = next(iter(pkg_bin.values()))
+                    command = "node"
+                    args = [str(source / first_bin)]
+                    detected_via = f"package.json bin: {first_bin}"
+                else:
+                    main = pkg_data.get("main", "index.js")
+                    command = "node"
+                    args = [str(source / main)]
+                    detected_via = f"package.json main: {main}"
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.warning("Failed to parse package.json at %s: %s", source, exc)
+
+        if not command:
+            return MCPInstallationResult(
+                success=False,
+                server_name=server_name,
+                option_name="local",
+                config_name=server_name,
+                message=(
+                    f"Could not detect entry point at {source}. "
+                    f"No pyproject.toml, setup.py, or package.json found."
+                ),
+            )
+
+        # Write config entry
+        config_name = server_name
+        if request.auto_configure:
+            server_config: Dict[str, Any] = {
+                "command": command,
+                "args": args,
+            }
+            env = request.env_vars or {}
+            if env:
+                server_config["env"] = env
+
+            # Write to .mcp.json in the source directory's parent or cwd
+            local_config_path = Path.cwd() / ".mcp.json"
+            config_data: Dict[str, Any] = {}
+            if local_config_path.exists():
+                try:
+                    config_data = json.loads(local_config_path.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    pass
+            config_data.setdefault("mcpServers", {})
+            config_data["mcpServers"][config_name] = server_config
+            local_config_path.write_text(
+                json.dumps(config_data, indent=2) + "\n", encoding="utf-8"
+            )
+            config_message = f"Wrote config to {local_config_path}"
+        else:
+            config_message = "Auto-configure disabled — manual config needed."
+
+        # Record in installation log
+        self.installed_servers[config_name] = {
+            "server_name": server_name,
+            "option_name": "local",
+            "install_command": f"{command} {' '.join(args)}",
+            "source_path": str(source),
+            "installed_at": datetime.now().isoformat(),
+            "env_vars": request.env_vars or {},
+            "status": "installed",
+        }
+        self._save_installation_log()
+
+        return MCPInstallationResult(
+            success=True,
+            server_name=server_name,
+            option_name="local",
+            config_name=config_name,
+            message=(
+                f"Configured '{server_name}' from local source at {source}\n"
+                f"Detected via: {detected_via}\n"
+                f"Command: `{command} {' '.join(args)}`\n"
+                f"{config_message}"
+            ),
+        )
+
+    def _detect_python_entry(self, source: Path, server_name: str) -> Optional[str]:
+        """Try to detect the Python module entry point from pyproject.toml."""
+        pyproject = source / "pyproject.toml"
+        if not pyproject.is_file():
+            return None
+        try:
+            import sys
+            if sys.version_info >= (3, 11):
+                import tomllib
+            else:
+                try:
+                    import tomli as tomllib  # type: ignore[no-redef]
+                except ImportError:
+                    return None
+
+            with open(pyproject, "rb") as f:
+                data = tomllib.load(f)
+
+            # Check [project.scripts] for an entry point
+            scripts = data.get("project", {}).get("scripts", {})
+            if scripts:
+                # Return the first script's module reference
+                for _name, ref in scripts.items():
+                    # ref is like "module.cli:main" — extract module
+                    module = ref.split(":")[0]
+                    return module
+
+            # Check [project] name to infer module
+            project_name = data.get("project", {}).get("name", "")
+            if project_name:
+                return project_name.replace("-", "_")
+        except Exception as exc:
+            logger.debug("Failed to parse pyproject.toml at %s: %s", source, exc)
+        return None
 
     async def _get_server_repo_url(self, server_name: str) -> Optional[str]:
         """Look up the server's repository URL from the discovery cache."""

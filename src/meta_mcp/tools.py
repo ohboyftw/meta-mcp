@@ -128,6 +128,14 @@ class GetServerInfoTool(Tool):
             content += f"**GitHub Stars:** {server_info.stars}\n"
 
         content += f"\n**Installation Options ({len(server_info.options)}):**\n\n"
+        if not server_info.options:
+            content += (
+                "_No predefined install recipe._ "
+                "Call `install_mcp_server` with `server_name=\""
+                + server_info.name
+                + "\"` to auto-detect. If the source code is on disk, "
+                "pass `source_path=\"/path/to/source\"` instead.\n\n"
+            )
         for option in server_info.options:
             content += f"- **{option.display_name}** (`{option.name}`)"
             if option.recommended:
@@ -153,7 +161,8 @@ class InstallMcpServerTool(Tool):
     def apply(
         self,
         server_name: str,
-        option_name: str,
+        option_name: str = "auto",
+        source_path: Optional[str] = None,
         env_vars: Optional[Dict[str, str]] = None,
         auto_configure: bool = True,
         target_clients: Optional[List[str]] = None,
@@ -161,15 +170,23 @@ class InstallMcpServerTool(Tool):
         """
         Install an MCP server with verification and multi-client support.
 
+        For servers with source code on disk, pass source_path to auto-detect
+        the entry point from pyproject.toml or package.json.
+
+        When no predefined install recipe exists and no source_path is given,
+        auto-detection is attempted (GitHub repo analysis, npm/PyPI search).
+
         Args:
             server_name: Name of the server to install
-            option_name: Installation option to use (e.g., 'official', 'enhanced')
+            option_name: Installation option (e.g. 'official', 'enhanced'). Use 'auto' to auto-detect.
+            source_path: Local filesystem path to server source code (for unpublished servers)
             env_vars: Environment variables to set (optional)
             auto_configure: Automatically update configuration
             target_clients: List of clients to configure (e.g. ['claude-code', 'cursor']). Omit to configure all detected clients.
         """
         request = MCPInstallationRequest(
             server_name=server_name, option_name=option_name,
+            source_path=source_path,
             env_vars=env_vars, auto_configure=auto_configure,
             target_clients=target_clients,
         )

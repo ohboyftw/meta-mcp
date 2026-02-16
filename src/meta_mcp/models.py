@@ -148,7 +148,8 @@ class MCPSearchResult(BaseModel):
 
 class MCPInstallationRequest(BaseModel):
     server_name: str = Field(description="Server name to install")
-    option_name: str = Field(description="Installation option to use")
+    option_name: str = Field("auto", description="Installation option to use ('auto' for auto-detection)")
+    source_path: Optional[str] = Field(None, description="Local filesystem path to server source code")
     env_vars: Optional[Dict[str, str]] = Field(None, description="Environment variables")
     auto_configure: bool = Field(True, description="Automatically update Claude configuration")
     target_clients: Optional[List[str]] = Field(None, description="R6: Target clients to configure")
