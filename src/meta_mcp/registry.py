@@ -331,6 +331,13 @@ def _extract_servers_from_config(
                     meaningful = [a for a in args if not a.startswith("-")]
                     if meaningful:
                         desc = f"Local MCP server: {meaningful[-1]}"
+        # Reconstruct install_command from command+args if present
+        cmd = config.get("command", "")
+        args = config.get("args", [])
+        install_command = None
+        if cmd:
+            install_command = " ".join([cmd] + list(args))
+
         out.append({
             "name": name,
             "description": desc or f"Locally configured MCP server: {name}",
@@ -342,7 +349,12 @@ def _extract_servers_from_config(
             "updated_at": None,
             "has_security_scan": False,
             "env_vars": list(config.get("env", {}).keys()) if config.get("env") else [],
-            "install_command": None,
+            "install_command": install_command,
+            # Preserve raw config for the installer to reuse
+            "command": cmd or None,
+            "args": args or None,
+            "cwd": config.get("cwd"),
+            "env": config.get("env"),
         })
 
 

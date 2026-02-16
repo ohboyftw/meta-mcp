@@ -80,6 +80,12 @@ class MCPInstaller:
 
         install_command = await self._get_install_command(server_name, option_name)
 
+        # --- Phase 1b: check local config for existing command/args ---
+        if not install_command:
+            local_result = await self._install_from_local_config(request)
+            if local_result is not None:
+                return local_result
+
         # --- Phase 2a: auto-detect from repository URL ---
         if not install_command:
             repo_url = await self._get_server_repo_url(server_name)
@@ -583,6 +589,92 @@ class MCPInstaller:
                 f"Configured '{server_name}' from local source at {source}\n"
                 f"Detected via: {detected_via}\n"
                 f"Command: `{command} {' '.join(args)}`\n"
+                f"{config_message}"
+            ),
+        )
+
+    async def _install_from_local_config(
+        self, request: MCPInstallationRequest,
+    ) -> Optional[MCPInstallationResult]:
+        """Check if the server already exists in local config and reuse its command/args.
+
+        Searches ``~/.claude.json``, project ``.mcp.json``, and extra registry
+        dirs.  If the server is found with a ``command``, writes (or confirms)
+        the config entry in the target location and returns a success result.
+
+        Returns ``None`` if the server is not found locally.
+        """
+        from .registry import _collect_local_servers
+
+        server_name = request.server_name
+        local_entries = _collect_local_servers()
+        match = None
+        for entry in local_entries:
+            if entry.get("name") == server_name and entry.get("command"):
+                match = entry
+                break
+
+        if match is None:
+            return None
+
+        command = match["command"]
+        args = match.get("args") or []
+        cwd = match.get("cwd")
+        env = match.get("env") or {}
+
+        # Merge caller-supplied env vars
+        if request.env_vars:
+            env.update(request.env_vars)
+
+        config_name = server_name
+        if request.auto_configure:
+            from typing import Any
+
+            server_config: Dict[str, Any] = {"command": command, "args": args}
+            if cwd:
+                server_config["cwd"] = cwd
+            if env:
+                server_config["env"] = env
+
+            local_config_path = Path.cwd() / ".mcp.json"
+            config_data: Dict[str, Any] = {}
+            if local_config_path.exists():
+                try:
+                    config_data = json.loads(
+                        local_config_path.read_text(encoding="utf-8")
+                    )
+                except (json.JSONDecodeError, OSError):
+                    pass
+            config_data.setdefault("mcpServers", {})
+            config_data["mcpServers"][config_name] = server_config
+            local_config_path.write_text(
+                json.dumps(config_data, indent=2) + "\n", encoding="utf-8"
+            )
+            config_message = f"Wrote config to {local_config_path}"
+        else:
+            config_message = "Auto-configure disabled — manual config needed."
+
+        cmd_str = " ".join([command] + list(args))
+
+        # Record in installation log
+        self.installed_servers[config_name] = {
+            "server_name": server_name,
+            "option_name": "local_config",
+            "install_command": cmd_str,
+            "installed_at": datetime.now().isoformat(),
+            "env_vars": env,
+            "status": "installed",
+        }
+        self._save_installation_log()
+
+        return MCPInstallationResult(
+            success=True,
+            server_name=server_name,
+            option_name="local_config",
+            config_name=config_name,
+            message=(
+                f"Configured '{server_name}' from existing local config.\n"
+                f"Command: `{cmd_str}`\n"
                 f"{config_message}"
             ),
         )
