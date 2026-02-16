@@ -14,6 +14,10 @@ Exposes 30+ tools covering R1-R10 plus project init:
 - R10: analyze_capability_stack
 """
 
+import functools
+import inspect
+import traceback
+
 from mcp.server.fastmcp import FastMCP
 
 from .tools import (
@@ -117,6 +121,29 @@ class MetaMCPServer:
             ProjectValidateTool(),
         ]
 
+    @staticmethod
+    def _wrap_tool(tool_instance: "Tool"):
+        """Create a wrapper that preserves apply()'s signature for FastMCP schema generation,
+        while adding logging and error handling from apply_ex."""
+
+        @functools.wraps(tool_instance.apply)
+        def wrapper(**kwargs):
+            try:
+                print(f"Calling {tool_instance.get_name()} with args: {kwargs}")
+                result = tool_instance.apply(**kwargs)
+                print(f"Result: {result[:200]}{'...' if len(result) > 200 else ''}")
+                return result
+            except Exception as e:
+                error_msg = f"Error executing tool {tool_instance.get_name()}: {e}"
+                print(f"Error: {error_msg}")
+                print(f"Traceback: {traceback.format_exc()}")
+                return error_msg
+
+        # Ensure the signature matches apply() exactly so FastMCP generates
+        # correct parameter schemas (not a generic **kwargs string param).
+        wrapper.__signature__ = inspect.signature(tool_instance.apply)
+        return wrapper
+
     def create_fastmcp_server(self, host: str = "0.0.0.0", port: int = 8000) -> FastMCP:
         mcp = FastMCP(
             "Meta MCP Server",
@@ -127,7 +154,7 @@ class MetaMCPServer:
         for tool_instance in self.tools:
             name = tool_instance.get_name()
             description = tool_instance.__class__.__doc__ or tool_instance.get_apply_docstring()
-            fn = tool_instance.apply_ex
+            fn = self._wrap_tool(tool_instance)
 
             mcp.tool(name=name, description=description)(fn)
 
