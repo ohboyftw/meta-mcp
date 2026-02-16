@@ -362,6 +362,45 @@ class ServerOrchestrator:
             if proc is not None:
                 await self._kill_process(proc, label=f"discovery:{name}")
 
+    # -- tool call forwarding ------------------------------------------------
+
+    async def forward_tool_call(
+        self,
+        server_name: str,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        timeout: float = _TOOL_CALL_TIMEOUT_S,
+    ) -> Any:
+        """Forward a single tool call to a running backend server.
+
+        The server must already be started via ``start_server()``.  If the
+        process has exited it will be restarted automatically.
+
+        Returns the extracted tool output (string or structured data).
+        Raises ``RuntimeError`` on RPC-level errors.
+        """
+        proc = await self._ensure_server_running(server_name)
+        assert proc.stdin is not None and proc.stdout is not None
+
+        req_id = self._alloc_request_id()
+        proc.stdin.write(_build_jsonrpc_request(
+            "tools/call",
+            params={"name": tool_name, "arguments": arguments},
+            request_id=req_id,
+        ))
+        await proc.stdin.drain()
+
+        response = await _read_jsonrpc_response(proc.stdout, timeout=timeout)
+
+        if "error" in response:
+            err = response["error"]
+            raise RuntimeError(
+                f"Backend '{server_name}' tool '{tool_name}' failed: "
+                f"{err.get('message', err)}"
+            )
+
+        return self._extract_tool_output(response.get("result", {}))
+
     # -- workflow execution --------------------------------------------------
 
     async def execute_workflow(

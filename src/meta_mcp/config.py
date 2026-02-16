@@ -1,7 +1,19 @@
 """
 MCP Configuration Management.
 
-This module handles reading, writing, and validating Claude Desktop MCP configurations.
+This module handles reading, writing, and validating MCP configurations for
+multiple clients (Claude Desktop, Claude Code, Cursor, etc.).
+
+**Claude Desktop vs Claude Code — config split:**
+
+Claude Desktop and Claude Code store MCP server configs in completely different
+files.  Writing to the wrong file causes the server to silently not load.
+
+* Claude Desktop:  platform-specific ``claude_desktop_config.json``
+* Claude Code:     ``~/.claude.json``  (user-scope, requires ``"type": "stdio"``)
+                   ``.mcp.json``       (project-scope)
+
+See ``clients.py`` and ``MCP_CLIENT_CONFIG_GUIDE.md`` for full details.
 """
 
 import json
@@ -14,7 +26,7 @@ from typing import Dict, List, Optional, Any
 
 from pydantic import BaseModel, ValidationError
 
-from .models import MCPConfiguration, MCPConfigEntry
+from .models import ClientType, MCPConfiguration, MCPConfigEntry
 
 logger = logging.getLogger(__name__)
 
@@ -29,29 +41,72 @@ class ConfigValidationResult(BaseModel):
 
 
 class MCPConfig:
-    """Manages MCP configuration for Claude Desktop."""
-    
-    def __init__(self, config_path: Optional[str] = None):
+    """Manages MCP configuration for a specific client.
+
+    The ``client_type`` parameter determines which config file is targeted:
+
+    * ``ClientType.CLAUDE_DESKTOP`` -> platform-specific ``claude_desktop_config.json``
+    * ``ClientType.CLAUDE_CODE``    -> ``~/.claude.json`` (user-scope)
+    * ``None`` (default)            -> project-scope ``.mcp.json`` (backward-compatible)
+
+    When ``client_type`` is ``CLAUDE_CODE``, the ``"type": "stdio"`` field is
+    automatically included in server entries written by :meth:`add_server`.
+    """
+
+    def __init__(
+        self,
+        config_path: Optional[str] = None,
+        client_type: Optional[ClientType] = None,
+    ):
+        self.client_type = client_type
         self.config_path = config_path or self._get_default_config_path()
         self.config_dir = Path(self.config_path).parent
-        
+
         # Ensure config directory exists
         self.config_dir.mkdir(parents=True, exist_ok=True)
 
+    @property
+    def is_claude_code(self) -> bool:
+        """Return ``True`` if this config targets Claude Code."""
+        return self.client_type == ClientType.CLAUDE_CODE
+
     def _get_default_config_path(self) -> str:
-        """Get the default MCP configuration path for Claude Code CLI."""
+        """Get the default MCP configuration path based on client type.
+
+        * Claude Desktop -> platform-specific ``claude_desktop_config.json``
+        * Claude Code    -> ``~/.claude.json`` (user-scope)
+        * None/other     -> ``.mcp.json`` in project tree (backward-compatible)
+        """
+        if self.client_type == ClientType.CLAUDE_CODE:
+            # Claude Code reads custom MCP servers from ~/.claude.json
+            # NOT from ~/.claude/settings.json (that's for official plugins only)
+            return str(Path.home() / ".claude.json")
+
+        if self.client_type == ClientType.CLAUDE_DESKTOP:
+            system = platform.system()
+            if system == "Darwin":
+                return str(
+                    Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+                )
+            if system == "Windows":
+                appdata = os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming"))
+                return str(Path(appdata) / "Claude" / "claude_desktop_config.json")
+            # Linux / other POSIX
+            return str(Path.home() / ".config" / "Claude" / "claude_desktop_config.json")
+
+        # Default: project-scope .mcp.json (backward-compatible behavior)
         # Look for .mcp.json in current working directory first
         cwd_config = Path.cwd() / ".mcp.json"
         if cwd_config.exists():
             return str(cwd_config)
-        
+
         # Look for .mcp.json in parent directories (project root detection)
         current_path = Path.cwd()
         for parent in [current_path] + list(current_path.parents):
             mcp_config = parent / ".mcp.json"
             if mcp_config.exists():
                 return str(mcp_config)
-        
+
         # If no existing .mcp.json found, create in current working directory
         return str(cwd_config)
 
@@ -94,26 +149,34 @@ class MCPConfig:
             raise
 
     async def add_server(self, name: str, command: str, args: List[str], cwd: Optional[str] = None, env_vars: Optional[Dict[str, str]] = None) -> None:
-        """Add a new MCP server to the configuration."""
+        """Add a new MCP server to the configuration.
+
+        When ``self.client_type`` is ``CLAUDE_CODE``, the entry automatically
+        includes ``"type": "stdio"`` which Claude Code requires.
+        """
         try:
             config = await self.load_configuration()
-            
+
+            # Claude Code requires the "type" field (typically "stdio")
+            entry_type = "stdio" if self.is_claude_code else None
+
             # Create server entry
             server_entry = MCPConfigEntry(
+                type=entry_type,
                 command=command,
                 args=args,
                 cwd=cwd,
-                env=env_vars
+                env=env_vars,
             )
-            
+
             # Add to configuration
             config.mcpServers[name] = server_entry
-            
+
             # Save updated configuration
             await self.save_configuration(config)
-            
-            logger.info(f"Added server '{name}' to configuration")
-            
+
+            logger.info(f"Added server '{name}' to configuration at {self.config_path}")
+
         except Exception as e:
             logger.error(f"Failed to add server '{name}': {e}")
             raise
@@ -314,10 +377,11 @@ class MCPConfig:
         try:
             config_path = Path(self.config_path)
             
-            info = {
+            info: Dict[str, Any] = {
                 "config_path": str(config_path),
                 "config_exists": config_path.exists(),
                 "config_dir_exists": config_path.parent.exists(),
+                "client_type": self.client_type.value if self.client_type else "project_mcp_json",
             }
             
             if config_path.exists():

@@ -4,10 +4,25 @@ Multi-Client Configuration Management (R6).
 Detects installed MCP clients, writes per-client configuration, and synchronises
 server entries across all detected clients so they stay in lock-step.
 
-Supported clients
------------------
-* Claude Desktop  (macOS / Linux / Windows)
-* Claude Code     (.mcp.json in project tree)
+**CRITICAL — Claude Desktop vs Claude Code config split:**
+
+Claude Desktop and Claude Code use **completely different config files** for MCP
+servers.  Writing to the wrong file causes servers to silently fail to load.
+
+* Claude Desktop:  platform-specific ``claude_desktop_config.json``
+                    (macOS: ~/Library/Application Support/Claude/...,
+                     Windows: %APPDATA%/Claude/..., Linux: ~/.config/Claude/...)
+                    Key: ``mcpServers``  — no ``type`` field needed.
+
+* Claude Code:     ``~/.claude.json`` (user-global scope)
+                    ``.mcp.json`` in project root (project scope)
+                    Key: ``mcpServers`` — **requires** ``"type": "stdio"`` field.
+
+Claude Code IGNORES ``~/.claude/settings.json`` for custom MCP servers.  The
+``settings.json`` file is only used for official *plugins* (``enabledPlugins``).
+
+Other supported clients
+-----------------------
 * Cursor          (~/.cursor/mcp.json)
 * VS Code         (~/.vscode/mcp.json  OR  {workspace}/.vscode/mcp.json)
 * Windsurf        (~/.windsurf/mcp.json  OR  ~/.codeium/windsurf/mcp.json)
@@ -20,6 +35,7 @@ import json
 import logging
 import os
 import platform
+import shutil
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -29,8 +45,6 @@ from .models import (
     ConfigDrift,
     ConfigSyncResult,
     DetectedClient,
-    MCPConfigEntry,
-    MCPConfiguration,
 )
 
 logger = logging.getLogger(__name__)
@@ -100,14 +114,33 @@ def _claude_desktop_config_path() -> Path:
     return _home() / ".config" / "Claude" / "claude_desktop_config.json"
 
 
-def _claude_code_config_path() -> Optional[Path]:
-    """Walk from cwd upward looking for ``.mcp.json``; return the first hit."""
+def _claude_code_user_config_path() -> Path:
+    """Return the Claude Code **user-scope** config path: ``~/.claude.json``.
+
+    This is where ``claude mcp add -s user`` writes server entries.
+    Claude Code reads MCP servers from this file — NOT from
+    ``~/.claude/settings.json`` (which is for official plugins only).
+    """
+    return _home() / ".claude.json"
+
+
+def _claude_code_project_config_path() -> Optional[Path]:
+    """Walk from cwd upward looking for ``.mcp.json``; return the first hit.
+
+    This is the Claude Code **project-scope** config, equivalent to
+    ``claude mcp add -s project``.
+    """
     current = Path.cwd()
     for directory in [current, *current.parents]:
         candidate = directory / ".mcp.json"
         if candidate.is_file():
             return candidate
     return None
+
+
+def _claude_cli_available() -> bool:
+    """Return ``True`` if the ``claude`` CLI is available on PATH."""
+    return shutil.which("claude") is not None
 
 
 def _cursor_config_path() -> Path:
@@ -212,15 +245,42 @@ class ClientManager:
         )
 
     def _detect_claude_code(self) -> Optional[DetectedClient]:
-        path = _claude_code_config_path()
-        if path is None:
+        """Detect Claude Code by checking for ``~/.claude.json`` or the ``claude`` CLI.
+
+        Claude Code stores its MCP server configs in ``~/.claude.json``
+        (user-scope) and ``.mcp.json`` (project-scope).  It does **not** read
+        servers from ``~/.claude/settings.json`` — that file is only for
+        official plugins.
+
+        We report the user-scope config path (``~/.claude.json``) as the
+        primary config path, and merge servers from both user and project
+        scopes into the ``configured_servers`` list.
+        """
+        user_config = _claude_code_user_config_path()
+        has_user_config = user_config.is_file()
+        has_cli = _claude_cli_available()
+
+        if not has_user_config and not has_cli:
             return None
-        servers = self._servers_from_mcp_format(path)
+
+        # Collect servers from user-scope config
+        servers: List[str] = []
+        if has_user_config:
+            servers.extend(self._servers_from_mcp_format(user_config))
+
+        # Also check project-scope .mcp.json for completeness
+        project_config = _claude_code_project_config_path()
+        if project_config is not None:
+            project_servers = self._servers_from_mcp_format(project_config)
+            for s in project_servers:
+                if s not in servers:
+                    servers.append(s)
+
         return DetectedClient(
             client_type=ClientType.CLAUDE_CODE,
             name=self._DISPLAY_NAMES[ClientType.CLAUDE_CODE],
-            config_path=str(path),
-            installed=True,
+            config_path=str(user_config),
+            installed=has_user_config or has_cli,
             configured_servers=servers,
         )
 
@@ -294,6 +354,10 @@ class ClientManager:
         The method reads any existing config, merges the new server entry,
         and writes back -- preserving all other settings.
 
+        **Important:** Claude Code requires a ``"type": "stdio"`` field in
+        each server entry.  This method handles that automatically when
+        *client* is ``ClientType.CLAUDE_CODE``.
+
         Returns ``True`` on success, ``False`` on failure.
         """
         args = args or []
@@ -313,6 +377,9 @@ class ClientManager:
 
         if client == ClientType.ZED:
             return self._configure_zed(config_path, server_name, command, args, env)
+
+        if client == ClientType.CLAUDE_CODE:
+            return self._configure_claude_code(config_path, server_name, command, args, env)
 
         return self._configure_standard(config_path, server_name, command, args, env)
 
@@ -338,6 +405,44 @@ class ClientManager:
         ok = _write_json(config_path, data)
         if ok:
             logger.info("Server '%s' written to %s", server_name, config_path)
+        return ok
+
+    # -- Claude Code (~/.claude.json with "type" field) -----------------
+
+    def _configure_claude_code(
+        self,
+        config_path: Path,
+        server_name: str,
+        command: str,
+        args: List[str],
+        env: Dict[str, str],
+    ) -> bool:
+        """Add/update a server in Claude Code's ``~/.claude.json``.
+
+        Claude Code requires a ``"type": "stdio"`` field in each server
+        entry — without it the server will silently fail to load.  This is
+        the key difference from the standard ``mcpServers`` format used by
+        Claude Desktop, Cursor, VS Code, and Windsurf.
+        """
+        data = _read_json(config_path)
+        data.setdefault("mcpServers", {})
+
+        entry: Dict[str, Any] = {
+            "type": "stdio",  # Required by Claude Code
+            "command": command,
+            "args": args,
+        }
+        if env:
+            entry["env"] = env
+        data["mcpServers"][server_name] = entry
+
+        ok = _write_json(config_path, data)
+        if ok:
+            logger.info(
+                "Server '%s' written to Claude Code config at %s (with type=stdio)",
+                server_name,
+                config_path,
+            )
         return ok
 
     # -- Zed settings.json (context_servers) ---------------------------
@@ -379,6 +484,12 @@ class ClientManager:
         3. For each server, note which clients have it and which do not.
         4. If *sync* is ``True``, copy the missing entries from a client
            that has the server to each client that lacks it.
+
+        **Config split handling:**  When syncing to Claude Code, the entry is
+        written to ``~/.claude.json`` with ``"type": "stdio"``.  When syncing
+        to Claude Desktop, the entry is written to ``claude_desktop_config.json``
+        without the ``type`` field.  This is handled automatically by
+        :meth:`configure_server_for_client`.
 
         Returns a :class:`ConfigSyncResult` summarising the outcome.
         """
@@ -505,14 +616,21 @@ class ClientManager:
         return list(data.get("mcpServers", {}).keys())
 
     def _config_path_for_client(self, client: ClientType) -> Optional[Path]:
-        """Resolve the configuration file path for the given *client*."""
+        """Resolve the configuration file path for the given *client*.
+
+        For Claude Code the user-scope config (``~/.claude.json``) is
+        returned — this is where ``claude mcp add -s user`` writes entries
+        and where Claude Code reads custom MCP servers from.
+        Do **not** confuse this with ``~/.claude/settings.json`` which is
+        only for official plugins.
+        """
         if client == ClientType.CLAUDE_DESKTOP:
             return _claude_desktop_config_path()
 
         if client == ClientType.CLAUDE_CODE:
-            path = _claude_code_config_path()
-            # If nothing found, default to cwd/.mcp.json
-            return path if path is not None else Path.cwd() / ".mcp.json"
+            # Always target the user-scope config for Claude Code.
+            # This is ~/.claude.json — the file that Claude Code actually reads.
+            return _claude_code_user_config_path()
 
         if client == ClientType.CURSOR:
             return _cursor_config_path()

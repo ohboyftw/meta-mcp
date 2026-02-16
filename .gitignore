@@ -13,3 +13,11 @@ build/
 .venv/
 venv/
 .mcp.json
+
+# MCP server runtime data
+.beacon/
+.engram/
+.serena/
+
+# Windows null-device artifact
+nul
