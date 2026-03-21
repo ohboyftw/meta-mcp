@@ -21,7 +21,6 @@ def run_async_safely(coro):
 from .discovery import MCPDiscovery
 from .installer import MCPInstaller
 from .config import MCPConfig
-from .intent import IntentEngine
 from .verification import ServerVerifier
 from .project import ProjectAnalyzer
 from .registry import RegistryFederation
@@ -29,7 +28,6 @@ from .clients import ClientManager
 from .memory import ConversationalMemory
 from .orchestration import ServerOrchestrator
 from .skills import SkillsManager
-from .capability_stack import CapabilityStack
 from .models import (
     MCPInstallationRequest,
     MCPSearchQuery,
@@ -359,72 +357,6 @@ class RefreshServerCacheTool(Tool):
         )
 
 
-# ─── R1: Intent-Based Capability Resolution ──────────────────────────────────
-
-class DetectCapabilityGapsTool(Tool):
-    """Analyze a task description and identify which MCP servers and capabilities are missing to accomplish it. The AI calls this when it realizes it cannot complete a task with its current tools."""
-
-    def __init__(self):
-        super().__init__()
-        self.engine = IntentEngine()
-        self.config = MCPConfig()
-
-    def apply(self, task_description: str) -> str:
-        """
-        Detect missing capabilities needed to accomplish a task.
-
-        Args:
-            task_description: Natural language description of the task, e.g. 'Research competitors and create a spreadsheet comparison'
-        """
-        config = run_async_safely(self.config.load_configuration())
-        installed = list(config.mcpServers.keys())
-        result = self.engine.detect_capability_gaps(task_description, installed)
-
-        if not result.missing_capabilities:
-            return f"No capability gaps detected. Your installed servers ({', '.join(installed) or 'none'}) should be sufficient for this task."
-
-        content = f"**Task:** {result.task_description}\n\n"
-        content += f"**Currently available:** {', '.join(result.currently_available) or 'none'}\n\n"
-        content += f"**Missing capabilities ({len(result.missing_capabilities)}):**\n\n"
-        for gap in result.missing_capabilities:
-            content += f"- **{gap.capability}** ({gap.priority} priority)\n"
-            content += f"  Reason: {gap.reason}\n"
-            content += f"  Servers: {', '.join(gap.servers)}\n\n"
-        content += f"**Suggested workflow:** {result.suggested_workflow}"
-        return content
-
-
-class SuggestWorkflowTool(Tool):
-    """Given a high-level goal, returns a complete workflow plan showing which servers to install, in what order, and how they chain together."""
-
-    def __init__(self):
-        super().__init__()
-        self.engine = IntentEngine()
-        self.config = MCPConfig()
-
-    def apply(self, goal: str) -> str:
-        """
-        Suggest a multi-server workflow for a goal.
-
-        Args:
-            goal: High-level goal like 'Set up CI/CD monitoring for my GitHub project'
-        """
-        config = run_async_safely(self.config.load_configuration())
-        installed = list(config.mcpServers.keys())
-        result = self.engine.suggest_workflow(goal, installed)
-
-        content = f"# Workflow: {result.workflow_name}\n\n"
-        content += f"{result.description}\n\n"
-        content += f"**Steps:**\n\n"
-        for step in result.steps:
-            marker = "required" if step.required else "optional"
-            content += f"{step.order}. **{step.server}** — {step.role} ({marker})\n"
-        if result.required_credentials:
-            content += f"\n**Required credentials:** {', '.join(result.required_credentials)}\n"
-        content += f"\n**Estimated setup time:** {result.estimated_setup_time}"
-        return content
-
-
 # ─── R3: Post-Install Verification ───────────────────────────────────────────
 
 class CheckEcosystemHealthTool(Tool):
@@ -659,44 +591,6 @@ class SyncConfigurationsTool(Tool):
         return content
 
 
-# ─── R7: Memory and Learning ─────────────────────────────────────────────────
-
-class GetInstallationHistoryTool(Tool):
-    """Get the history of all MCP server installations, failures, and learned user preferences."""
-
-    def __init__(self):
-        super().__init__()
-        self.memory = ConversationalMemory()
-
-    def apply(self, server_filter: Optional[str] = None) -> str:
-        """
-        Get installation history and learned preferences.
-
-        Args:
-            server_filter: Optional server name to filter history
-        """
-        history = self.memory.get_installation_history(server=server_filter)
-        prefs = self.memory.get_preferences()
-
-        content = "# Installation History\n\n"
-        if not history:
-            content += "No installations recorded yet.\n"
-        else:
-            content += f"**Total installations:** {len(history)}\n\n"
-            for record in history[-20:]:
-                icon = "OK" if record.success else "FAIL"
-                content += f"[{icon}] {record.server_name} ({record.option_name}) — {record.installed_at.strftime('%Y-%m-%d %H:%M')}\n"
-
-        content += f"\n## Learned Preferences\n\n"
-        content += f"**Preferred install method:** {prefs.preferred_install_method or 'none yet'}\n"
-        content += f"**Preferred clients:** {', '.join(prefs.preferred_clients) or 'none yet'}\n"
-        content += f"**Prefers official:** {prefs.prefers_official}\n"
-        content += f"**Interactions:** {prefs.interaction_count}\n"
-        if prefs.common_server_combos:
-            content += f"**Common combos:** {prefs.common_server_combos[:3]}\n"
-        return content
-
-
 # ─── R8: Live Orchestration ──────────────────────────────────────────────────
 
 class StartServerTool(Tool):
@@ -803,47 +697,6 @@ class DiscoverServerToolsTool(Tool):
             content += f"\n**Prompts ({len(result.prompts)}):**\n"
             for p in result.prompts:
                 content += f"- {p.get('name', 'unknown')}: {p.get('description', '')}\n"
-        return content
-
-
-class ExecuteWorkflowTool(Tool):
-    """Execute a cross-server workflow by chaining tool calls across multiple MCP servers in sequence, passing outputs between steps."""
-
-    def __init__(self):
-        super().__init__()
-        self.orchestrator = ServerOrchestrator()
-
-    def apply(self, workflow_name: str, steps: List[Dict]) -> str:
-        """
-        Execute a multi-server workflow.
-
-        Args:
-            workflow_name: Name for this workflow execution
-            steps: List of workflow steps, each with 'server', 'tool', 'input', and optionally 'command'/'args'/'env'
-        """
-        from .models import WorkflowExecutionStep, WorkflowStepStatus
-
-        exec_steps = []
-        for step in steps:
-            exec_steps.append(WorkflowExecutionStep(
-                server=step["server"],
-                tool=step["tool"],
-                input=step.get("input", {}),
-            ))
-
-        result = run_async_safely(self.orchestrator.execute_workflow(exec_steps))
-
-        content = f"# Workflow: {result.workflow_name}\n\n"
-        content += f"**Status:** {result.overall_status}\n"
-        content += f"**Total time:** {result.total_time_ms}ms\n\n"
-        for step in result.steps:
-            icon = {"completed": "OK", "failed": "FAIL", "skipped": "SKIP"}.get(step.status.value, "??")
-            content += f"[{icon}] {step.server}.{step.tool}"
-            if step.latency_ms:
-                content += f" ({step.latency_ms}ms)"
-            content += "\n"
-            if step.error:
-                content += f"  Error: {step.error}\n"
         return content
 
 
@@ -974,43 +827,6 @@ class UninstallSkillTool(Tool):
         return f"Skill '{name}' not found in {skill_scope.value} scope."
 
 
-class GenerateWorkflowSkillTool(Tool):
-    """Package a multi-server workflow as a reusable Agent Skill (SKILL.md). Creates a flywheel: the more you use Meta-MCP, the more skills it generates."""
-
-    def __init__(self):
-        super().__init__()
-        self.skills_mgr = SkillsManager()
-
-    def apply(
-        self,
-        name: str,
-        description: str,
-        workflow_steps: List[Dict],
-    ) -> str:
-        """
-        Generate a reusable SKILL.md from a workflow.
-
-        Args:
-            name: Skill name (e.g. 'competitive-research')
-            description: What the skill does
-            workflow_steps: List of steps, each with 'server' and 'action' keys
-        """
-        result = self.skills_mgr.generate_workflow_skill(
-            name=name,
-            description=description,
-            workflow_steps=workflow_steps,
-        )
-        if result:
-            content = f"Workflow skill generated!\n\n"
-            content += f"**Name:** {result.name}\n"
-            content += f"**Path:** {result.path}\n"
-            content += f"**Steps:** {len(result.workflow_steps)}\n"
-            content += f"**Required servers:** {', '.join(result.required_servers)}\n"
-            content += f"\nThis skill will auto-invoke for similar tasks."
-            return content
-        return "Failed to generate workflow skill."
-
-
 class AnalyzeSkillTrustTool(Tool):
     """Security analysis of an Agent Skill. Checks for prompt injection patterns, overly broad tool permissions, and suspicious content."""
 
@@ -1037,85 +853,6 @@ class AnalyzeSkillTrustTool(Tool):
             content += "\n"
 
         content += f"**Recommendation:** {result.recommendation}"
-        return content
-
-
-class DiscoverPromptsTool(Tool):
-    """Discover MCP Prompts exposed by configured servers. Most clients ignore this protocol primitive — Meta-MCP surfaces them as pre-built workflow templates."""
-
-    def __init__(self):
-        super().__init__()
-        self.skills_mgr = SkillsManager()
-        self.config = MCPConfig()
-
-    def apply(self) -> str:
-        """Discover MCP Prompts from all configured servers."""
-        config = run_async_safely(self.config.load_configuration())
-        prompts = run_async_safely(self.skills_mgr.discover_prompts(config.mcpServers))
-
-        if not prompts:
-            return "No MCP Prompts discovered from configured servers."
-
-        content = f"# MCP Prompts Discovered ({len(prompts)})\n\n"
-        by_server = {}
-        for p in prompts:
-            by_server.setdefault(p.server, []).append(p)
-
-        for server, server_prompts in by_server.items():
-            content += f"## {server} ({len(server_prompts)} prompts)\n"
-            for p in server_prompts:
-                content += f"- **{p.name}** — {p.description}\n"
-                if p.arguments:
-                    content += f"  Args: {', '.join(p.arguments)}\n"
-            content += "\n"
-        return content
-
-
-# ─── R10: Capability Stack ───────────────────────────────────────────────────
-
-class AnalyzeCapabilityStackTool(Tool):
-    """Analyze the full capability stack across all 4 layers (Tools, Prompts, Skills, Project Context) and identify gaps at every level."""
-
-    def __init__(self):
-        super().__init__()
-        self.stack = CapabilityStack()
-
-    def apply(self, project_path: str = ".") -> str:
-        """
-        Analyze the full 4-layer capability stack.
-
-        Args:
-            project_path: Path to project directory
-        """
-        report = self.stack.analyze_full_stack(project_path)
-
-        content = "# Capability Stack Report\n\n"
-        content += f"**Overall Score:** {report.score}/100\n\n"
-
-        content += "## Layer 1: MCP Servers (Tools)\n"
-        content += f"  Configured: {report.tools_layer.get('count', 0)} servers\n"
-        if report.tools_layer.get('servers'):
-            content += f"  Servers: {', '.join(report.tools_layer['servers'])}\n"
-        content += "\n"
-
-        content += "## Layer 2: MCP Prompts\n"
-        content += f"  Available: {report.prompts_layer.get('count', 0)} prompts\n\n"
-
-        content += "## Layer 3: Agent Skills\n"
-        content += f"  Installed: {report.skills_layer.get('count', 0)} skills\n\n"
-
-        content += "## Layer 4: Project Context\n"
-        content += f"  AGENTS.md: {'found' if report.context_layer.get('has_agents_md') else 'missing'}\n"
-        content += f"  Project detected: {'yes' if report.context_layer.get('has_project') else 'no'}\n\n"
-
-        if report.gaps:
-            content += f"## Gaps ({len(report.gaps)})\n\n"
-            for gap in report.gaps:
-                content += f"- **[{gap.layer.value}]** {gap.gap}\n"
-                content += f"  Fix: {gap.fix}\n\n"
-        else:
-            content += "No gaps detected — your capability stack is complete!\n"
-
         return content
 
 
@@ -1175,6 +912,14 @@ class ListRepoSkillsTool(Tool):
             if skill.has_mcp_server:
                 cmd_str = f"{skill.mcp_command} {' '.join(skill.mcp_args or [])}"
                 content += f"- **MCP Server:** `{cmd_str}`\n"
+            content += "\n"
+
+        # Catalog: include server summary (folded from RepoCatalogTool)
+        catalog = manager.full_catalog()
+        if catalog["servers"]:
+            content += f"## MCP Servers ({len(catalog['servers'])})\n\n"
+            for s in catalog["servers"]:
+                content += f"- **{s['name']}** [{s['category']}]: {s['description'][:80]}\n"
             content += "\n"
 
         return content
@@ -1367,50 +1112,6 @@ class AddSkillRepoTool(Tool):
         except Exception as exc:
             return f"Failed to add repository: {exc}"
 
-
-class RepoCatalogTool(Tool):
-    """Get a complete catalog of all registered repositories, their skills, and MCP servers in a single view."""
-
-    def __init__(self):
-        super().__init__()
-
-    def apply(self) -> str:
-        """
-        Get the full catalog of all skill repositories.
-        """
-        from .skill_repo import SkillRepoManager
-
-        manager = SkillRepoManager()
-        catalog = manager.full_catalog()
-
-        if not catalog["repos"]:
-            return (
-                "No skill repositories configured.\n\n"
-                "Add a repository with:\n"
-                "    add_skill_repo(repo_path='D:/Home/claudeSkills/repo')"
-            )
-
-        content = "# Skill Repository Catalog\n\n"
-
-        for repo in catalog["repos"]:
-            content += f"## {repo['name']}\n"
-            content += f"Path: `{repo['path']}`\n\n"
-
-        content += f"**Total Skills:** {len(catalog['skills'])}\n"
-        content += f"**Total Servers:** {len(catalog['servers'])}\n\n"
-
-        if catalog["skills"]:
-            content += "## All Skills\n\n"
-            for s in catalog["skills"]:
-                mcp = " MCP" if s.get("has_mcp_server") else ""
-                content += f"- **{s['name']}**{mcp} — {s['description'][:100]}\n"
-
-        if catalog["servers"]:
-            content += "\n## All Servers\n\n"
-            for s in catalog["servers"]:
-                content += f"- **{s['name']}** [{s['category']}]: {s['description'][:80]}\n"
-
-        return content
 
 
 # ─── Project Init Tools ───────────────────────────────────────────────────────
