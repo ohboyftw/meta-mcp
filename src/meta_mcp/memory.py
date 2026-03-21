@@ -232,30 +232,3 @@ class ConversationalMemory:
             )
             return self._state.preferences.model_copy(deep=True)
 
-    # ---- history queries -------------------------------------------------
-
-    def get_installation_history(
-        self, project: Optional[str] = None,
-    ) -> List[InstallationRecord]:
-        """Return installation records sorted newest-first.
-
-        When *project* is given, only records whose ``project_path`` matches
-        the exact path or is a sub-path are included.
-        """
-        with self._lock:
-            records = list(self._state.installations)
-
-        if project:
-            # Normalise with trailing separator so "/tmp/proj" does not
-            # accidentally match "/tmp/proj2".
-            norm = project.rstrip("/") + "/"
-            records = [
-                r for r in records
-                if r.project_path is not None
-                and (r.project_path == project
-                     or r.project_path.rstrip("/") + "/" == norm
-                     or r.project_path.startswith(norm))
-            ]
-
-        records.sort(key=lambda r: r.installed_at, reverse=True)
-        return records
