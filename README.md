@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <strong>The MCP server that manages all your other MCP servers.</strong>
+  <strong>Keep your MCP configuration in sync across all your AI tools, and bootstrap project environments instantly.</strong>
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/protocol-MCP-8A2BE2?style=flat-square" alt="MCP Protocol">
-  <img src="https://img.shields.io/badge/tools-39-green?style=flat-square" alt="39 Tools">
+  <img src="https://img.shields.io/badge/tools-31-green?style=flat-square" alt="31 Tools">
   <img src="https://img.shields.io/badge/clients-6-orange?style=flat-square" alt="6 Clients">
   <img src="https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square" alt="MIT License">
 </p>
@@ -104,132 +104,60 @@ Audit all four layers of your agent's capabilities — Tools, Prompts, Skills, a
 
 ## Tool Reference
 
-39 tools across 11 capability areas.
+31 tools across 3 tiers.
 
 <details>
-<summary><strong>Core &mdash; Server Lifecycle</strong> (8 tools)</summary>
+<summary><strong>Tier 1 &mdash; Sync & Bootstrap</strong> (5 tools)</summary>
 
 | Tool | Description |
 |------|-------------|
-| `search_mcp_servers` | Natural language search across available servers |
-| `get_server_info` | Detailed info: install options, credentials, docs |
-| `install_mcp_server` | Install with fallback strategies and auto-configuration |
-| `list_installed_servers` | Show installed servers and their status |
-| `uninstall_mcp_server` | Remove a server and clean up config |
-| `validate_config` | Check configuration for errors and missing credentials |
-| `get_manager_stats` | Ecosystem statistics |
-| `refresh_server_cache` | Refresh the discovery cache |
+| `detect_clients` | Find all MCP clients installed on this machine |
+| `sync_configurations` | Detect config drift and repair across all clients |
+| `validate_config` | Check config for errors and missing credentials |
+| `project_init` | Bootstrap `.mcp.json` from a profile YAML |
+| `project_validate` | Health-check a project's MCP setup |
 
 </details>
 
 <details>
-<summary><strong>Intent Resolution</strong> (2 tools)</summary>
+<summary><strong>Tier 2 &mdash; Skills & Repo</strong> (11 tools)</summary>
 
 | Tool | Description |
 |------|-------------|
-| `detect_capability_gaps` | Analyze a task and identify missing MCP servers |
-| `suggest_workflow` | Generate a multi-server workflow plan for a goal |
-
-</details>
-
-<details>
-<summary><strong>Verification</strong> (1 tool)</summary>
-
-| Tool | Description |
-|------|-------------|
-| `check_ecosystem_health` | Probe all servers — status, latency, fix suggestions |
-
-</details>
-
-<details>
-<summary><strong>Project Context</strong> (2 tools)</summary>
-
-| Tool | Description |
-|------|-------------|
-| `analyze_project_context` | Detect language, framework, services; recommend servers |
-| `install_workflow` | Batch install multiple servers in one flow |
-
-</details>
-
-<details>
-<summary><strong>Registry Federation</strong> (1 tool)</summary>
-
-| Tool | Description |
-|------|-------------|
-| `search_federated` | Search Official Registry, Smithery, mcp.so with trust scoring |
-
-</details>
-
-<details>
-<summary><strong>Multi-Client Configuration</strong> (2 tools)</summary>
-
-| Tool | Description |
-|------|-------------|
-| `detect_clients` | Find installed MCP clients on this machine |
-| `sync_configurations` | Detect and repair config drift across clients |
-
-</details>
-
-<details>
-<summary><strong>Memory</strong> (1 tool)</summary>
-
-| Tool | Description |
-|------|-------------|
-| `get_installation_history` | Installation history and learned preferences |
-
-</details>
-
-<details>
-<summary><strong>Live Orchestration</strong> (5 tools)</summary>
-
-| Tool | Description |
-|------|-------------|
-| `start_server` | Start an MCP server process |
-| `stop_server` | Stop a running server |
-| `restart_server` | Restart a server |
-| `discover_server_tools` | Connect and enumerate a server's tools/prompts/resources |
-| `execute_workflow` | Chain tool calls across multiple servers |
-
-</details>
-
-<details>
-<summary><strong>Agent Skills</strong> (7 tools)</summary>
-
-| Tool | Description |
-|------|-------------|
-| `search_capabilities` | Unified search across servers, skills, and prompts |
-| `list_skills` | List installed Agent Skills (global + project) |
-| `install_skill` | Install a skill from GitHub, registry, or local path |
+| `search_capabilities` | Unified search across servers + skills |
+| `list_skills` | List installed skills (global + project + extra) |
+| `install_skill` | Install from GitHub, registry, or local path |
 | `uninstall_skill` | Remove an installed skill |
-| `generate_workflow_skill` | Package a workflow as a reusable SKILL.md |
-| `analyze_skill_trust` | Security analysis: prompt injection, broad permissions |
-| `discover_prompts` | Surface MCP Prompts from configured servers |
-
-</details>
-
-<details>
-<summary><strong>Skill Repository</strong> (7 tools)</summary>
-
-| Tool | Description |
-|------|-------------|
-| `list_repo_skills` | List all skills in the repository |
-| `search_repo` | Search skills + servers by intent |
-| `install_from_repo` | Install a skill and its co-located MCP server |
+| `analyze_skill_trust` | Security scan before install |
+| `list_repo_skills` | List skills in configured repo (includes catalog) |
+| `search_repo` | Search repo skills + servers by intent |
+| `install_from_repo` | Install skill + co-located MCP server |
 | `batch_install_from_repo` | Install multiple skills at once |
 | `list_repo_servers` | List MCP servers defined in the repo |
 | `add_skill_repo` | Add a new skill repository to the search path |
-| `repo_catalog` | Full catalog of all repos, skills, and servers |
 
 </details>
 
 <details>
-<summary><strong>Project Init & Capability Stack</strong> (3 tools)</summary>
+<summary><strong>Tier 3 &mdash; Server Lifecycle</strong> (15 tools)</summary>
 
 | Tool | Description |
 |------|-------------|
-| `project_init` | Bootstrap a project's `.mcp.json` in one call |
-| `project_validate` | Validate a project's MCP setup health |
-| `analyze_capability_stack` | Audit all 4 layers (Tools, Prompts, Skills, Context) |
+| `search_mcp_servers` | Natural language search |
+| `get_server_info` | Detailed info and install options |
+| `install_mcp_server` | Install with fallback chain |
+| `list_installed_servers` | Show installed servers |
+| `uninstall_mcp_server` | Remove and clean up |
+| `search_federated` | Search across registries |
+| `refresh_server_cache` | Refresh discovery cache |
+| `get_manager_stats` | Ecosystem statistics |
+| `analyze_project_context` | Detect stack, recommend servers |
+| `install_workflow` | Batch install multiple servers |
+| `check_ecosystem_health` | Probe all servers for health |
+| `start_server` | Start a server process |
+| `stop_server` | Stop a running server |
+| `restart_server` | Restart a server |
+| `discover_server_tools` | Connect and enumerate a server's tools |
 
 </details>
 
@@ -451,7 +379,7 @@ Instructions for Claude to follow when this skill is invoked...
 ```
 src/meta_mcp/
   ├── server.py            FastMCP server entry point
-  ├── tools.py             39 tool implementations (Tool.apply() -> str)
+  ├── tools.py             31 tool implementations (Tool.apply() -> str)
   ├── tools_base.py        Base class with auto-naming and schema extraction
   │
   ├── _parsing.py          Shared SKILL.md parsing and name normalisation
@@ -462,7 +390,6 @@ src/meta_mcp/
   ├── discovery.py         Server discovery and search
   ├── installer.py         Install / uninstall with fallback chains
   ├── config.py            Per-client config read / write / validate
-  ├── intent.py            Intent-based capability resolution
   ├── verification.py      Post-install health checking
   ├── project.py           Project context analysis
   ├── registry.py          Federated registry search
@@ -472,7 +399,7 @@ src/meta_mcp/
   ├── clients.py           Multi-client detection and drift sync
   ├── skills.py            Agent Skills management
   ├── skill_repo.py        Skill repository discovery and installation
-  ├── capability_stack.py  4-layer capability audit
+  ├── profiles/            Profile YAMLs for project bootstrapping
   └── project_init.py      One-call project bootstrap
 ```
 
