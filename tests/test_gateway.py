@@ -111,7 +111,7 @@ class TestGatewayServer:
         gw = GatewayServer(registry=reg)
 
         tool_names = gw._get_gateway_tool_names()
-        # Should have gateway tools + 3 core meta-mcp tools
+        # Should have gateway tools + 2 core meta-mcp tools
         assert "activate_backend" in tool_names
         assert "deactivate_backend" in tool_names
         assert "list_backends" in tool_names
@@ -120,7 +120,6 @@ class TestGatewayServer:
         # Core meta-mcp tools
         assert "search_mcp_servers" in tool_names
         assert "install_mcp_server" in tool_names
-        assert "detect_capability_gaps" in tool_names
         # Should NOT have 30+ tools
         assert len(tool_names) <= 10
 

@@ -126,18 +126,16 @@ class GatewayServer:
         self._register_core_meta_tools()
 
     def _register_core_meta_tools(self) -> None:
-        """Register a small subset of meta-mcp's core tools (search, install, gaps)."""
+        """Register a small subset of meta-mcp's core tools (search, install)."""
         # Import lazily to avoid circular imports and only pull what we need.
         from .tools import (
             SearchMcpServersTool,
             InstallMcpServerTool,
-            DetectCapabilityGapsTool,
         )
 
         core_tools = [
             SearchMcpServersTool(),
             InstallMcpServerTool(),
-            DetectCapabilityGapsTool(),
         ]
 
         for tool_instance in core_tools:

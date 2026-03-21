@@ -1,10 +1,5 @@
 """Tests for ConversationalMemory (R7)."""
 
-import json
-from datetime import datetime, timedelta
-from pathlib import Path
-from unittest.mock import patch
-
 import pytest
 
 from src.meta_mcp.memory import ConversationalMemory, _MAX_RECORDS
@@ -16,7 +11,7 @@ class TestConversationalMemory:
     def test_init_fresh(self, tmp_path):
         """New memory file starts with empty state."""
         mem = ConversationalMemory(memory_path=str(tmp_path / "mem.json"))
-        assert mem.get_installation_history() == []
+        assert mem._state.installations == []
 
     def test_record_installation(self, tmp_path):
         mem = ConversationalMemory(memory_path=str(tmp_path / "mem.json"))
@@ -25,9 +20,8 @@ class TestConversationalMemory:
         )
         assert record.server_name == "brave-search"
         assert record.success is True
-        history = mem.get_installation_history()
-        assert len(history) == 1
-        assert history[0].server_name == "brave-search"
+        assert len(mem._state.installations) == 1
+        assert mem._state.installations[0].server_name == "brave-search"
 
     def test_record_failure(self, tmp_path):
         mem = ConversationalMemory(memory_path=str(tmp_path / "mem.json"))
@@ -57,22 +51,20 @@ class TestConversationalMemory:
         mem1.record_installation(server="s1", option="o1", success=True)
 
         mem2 = ConversationalMemory(memory_path=path)
-        history = mem2.get_installation_history()
-        assert len(history) == 1
-        assert history[0].server_name == "s1"
+        assert len(mem2._state.installations) == 1
+        assert mem2._state.installations[0].server_name == "s1"
 
     def test_corrupt_file_resets(self, tmp_path):
         path = tmp_path / "mem.json"
         path.write_text("NOT VALID JSON", encoding="utf-8")
         mem = ConversationalMemory(memory_path=str(path))
-        assert mem.get_installation_history() == []
+        assert mem._state.installations == []
 
     def test_trim_keeps_max_records(self, tmp_path):
         mem = ConversationalMemory(memory_path=str(tmp_path / "mem.json"))
         for i in range(_MAX_RECORDS + 5):
             mem.record_installation(server=f"s{i}", option="o", success=True)
-        history = mem.get_installation_history()
-        assert len(history) <= _MAX_RECORDS
+        assert len(mem._state.installations) <= _MAX_RECORDS
 
 
 class TestPreferences:
@@ -101,29 +93,6 @@ class TestPreferences:
             mem.record_installation(server="s", option="enhanced", success=True)
         prefs = mem.get_preferences()
         assert prefs.prefers_official is True
-
-
-class TestHistoryQueries:
-    """Installation history query filtering."""
-
-    def test_filter_by_project(self, tmp_path):
-        mem = ConversationalMemory(memory_path=str(tmp_path / "mem.json"))
-        mem.record_installation(
-            server="s1", option="o", success=True, project_path="/proj/a",
-        )
-        mem.record_installation(
-            server="s2", option="o", success=True, project_path="/proj/b",
-        )
-        result = mem.get_installation_history(project="/proj/a")
-        assert len(result) == 1
-        assert result[0].server_name == "s1"
-
-    def test_history_sorted_newest_first(self, tmp_path):
-        mem = ConversationalMemory(memory_path=str(tmp_path / "mem.json"))
-        mem.record_installation(server="first", option="o", success=True)
-        mem.record_installation(server="second", option="o", success=True)
-        history = mem.get_installation_history()
-        assert history[0].server_name == "second"
 
 
 class TestErrorSignature:
