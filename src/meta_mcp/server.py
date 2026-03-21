@@ -1,17 +1,13 @@
 """
 Meta MCP Server - A FastMCP-based MCP server manager.
 
-Exposes 30+ tools covering R1-R10 plus project init:
-- Core: search, info, install, list, uninstall, validate, stats, refresh
-- R1: detect_capability_gaps, suggest_workflow
-- R3: check_ecosystem_health
-- R4: analyze_project_context, install_workflow
-- R5: search_federated
-- R6: detect_clients, sync_configurations
-- R7: get_installation_history
-- R8: start_server, stop_server, restart_server, discover_server_tools, execute_workflow
-- R9: search_capabilities, list_skills, install_skill, uninstall_skill, generate_workflow_skill, analyze_skill_trust, discover_prompts
-- R10: analyze_capability_stack
+Exposes 31 tools organized in 3 tiers:
+- Tier 1 (Sync & Bootstrap): detect_clients, sync_configurations, validate_config, project_init, project_validate
+- Tier 2 (Skills & Repo): search_capabilities, list_skills, install_skill, uninstall_skill, analyze_skill_trust,
+  list_repo_skills, search_repo, install_from_repo, batch_install_from_repo, list_repo_servers, add_skill_repo
+- Tier 3 (Server Lifecycle): search_mcp_servers, get_server_info, install_mcp_server, list_installed_servers,
+  uninstall_mcp_server, search_federated, refresh_server_cache, get_manager_stats, analyze_project_context,
+  install_workflow, check_ecosystem_health, start_server, stop_server, restart_server, discover_server_tools
 """
 
 import functools
@@ -21,57 +17,40 @@ import traceback
 from mcp.server.fastmcp import FastMCP
 
 from .tools import (
-    # Core tools
+    # Tier 1: Sync & Bootstrap
+    DetectClientsTool,
+    SyncConfigurationsTool,
+    ValidateConfigTool,
+    ProjectInitTool,
+    ProjectValidateTool,
+    # Tier 2: Skills & Repo
+    SearchCapabilitiesTool,
+    ListSkillsTool,
+    InstallSkillTool,
+    UninstallSkillTool,
+    AnalyzeSkillTrustTool,
+    ListRepoSkillsTool,
+    SearchRepoTool,
+    InstallFromRepoTool,
+    BatchInstallFromRepoTool,
+    ListRepoServersTool,
+    AddSkillRepoTool,
+    # Tier 3: Server Lifecycle
     SearchMcpServersTool,
     GetServerInfoTool,
     InstallMcpServerTool,
     ListInstalledServersTool,
     UninstallMcpServerTool,
-    ValidateConfigTool,
-    GetManagerStatsTool,
+    SearchFederatedTool,
     RefreshServerCacheTool,
-    # R1: Intent-Based Resolution
-    DetectCapabilityGapsTool,
-    SuggestWorkflowTool,
-    # R3: Verification
-    CheckEcosystemHealthTool,
-    # R4: Project Context
+    GetManagerStatsTool,
     AnalyzeProjectContextTool,
     InstallWorkflowTool,
-    # R5: Registry Federation
-    SearchFederatedTool,
-    # R6: Multi-Client
-    DetectClientsTool,
-    SyncConfigurationsTool,
-    # R7: Memory
-    GetInstallationHistoryTool,
-    # R8: Orchestration
+    CheckEcosystemHealthTool,
     StartServerTool,
     StopServerTool,
     RestartServerTool,
     DiscoverServerToolsTool,
-    ExecuteWorkflowTool,
-    # R9: Skills
-    SearchCapabilitiesTool,
-    ListSkillsTool,
-    InstallSkillTool,
-    UninstallSkillTool,
-    GenerateWorkflowSkillTool,
-    AnalyzeSkillTrustTool,
-    DiscoverPromptsTool,
-    # R10: Capability Stack
-    AnalyzeCapabilityStackTool,
-    # R9 Extension: Skill Repo
-    ListRepoSkillsTool,
-    InstallFromRepoTool,
-    BatchInstallFromRepoTool,
-    SearchRepoTool,
-    ListRepoServersTool,
-    AddSkillRepoTool,
-    RepoCatalogTool,
-    # Project Init
-    ProjectInitTool,
-    ProjectValidateTool,
 )
 from .tools_base import Tool
 
@@ -84,57 +63,40 @@ class MetaMCPServer:
 
     def _initialize_tools(self):
         return [
-            # Core management
+            # ── Tier 1: Sync & Bootstrap ──────────────────────────────
+            DetectClientsTool(),
+            SyncConfigurationsTool(),
+            ValidateConfigTool(),
+            ProjectInitTool(),
+            ProjectValidateTool(),
+            # ── Tier 2: Skills & Repo ─────────────────────────────────
+            SearchCapabilitiesTool(),
+            ListSkillsTool(),
+            InstallSkillTool(),
+            UninstallSkillTool(),
+            AnalyzeSkillTrustTool(),
+            ListRepoSkillsTool(),
+            SearchRepoTool(),
+            InstallFromRepoTool(),
+            BatchInstallFromRepoTool(),
+            ListRepoServersTool(),
+            AddSkillRepoTool(),
+            # ── Tier 3: Server Lifecycle ──────────────────────────────
             SearchMcpServersTool(),
             GetServerInfoTool(),
             InstallMcpServerTool(),
             ListInstalledServersTool(),
             UninstallMcpServerTool(),
-            ValidateConfigTool(),
-            GetManagerStatsTool(),
+            SearchFederatedTool(),
             RefreshServerCacheTool(),
-            # R1: Intent-Based Capability Resolution
-            DetectCapabilityGapsTool(),
-            SuggestWorkflowTool(),
-            # R3: Post-Install Verification
-            CheckEcosystemHealthTool(),
-            # R4: Project Context Awareness
+            GetManagerStatsTool(),
             AnalyzeProjectContextTool(),
             InstallWorkflowTool(),
-            # R5: Registry Federation
-            SearchFederatedTool(),
-            # R6: Multi-Client Configuration
-            DetectClientsTool(),
-            SyncConfigurationsTool(),
-            # R7: Memory and Learning
-            GetInstallationHistoryTool(),
-            # R8: Live Orchestration
+            CheckEcosystemHealthTool(),
             StartServerTool(),
             StopServerTool(),
             RestartServerTool(),
             DiscoverServerToolsTool(),
-            ExecuteWorkflowTool(),
-            # R9: Agent Skills
-            SearchCapabilitiesTool(),
-            ListSkillsTool(),
-            InstallSkillTool(),
-            UninstallSkillTool(),
-            GenerateWorkflowSkillTool(),
-            AnalyzeSkillTrustTool(),
-            DiscoverPromptsTool(),
-            # R9 Extension: Skill Repo
-            ListRepoSkillsTool(),
-            InstallFromRepoTool(),
-            BatchInstallFromRepoTool(),
-            SearchRepoTool(),
-            ListRepoServersTool(),
-            AddSkillRepoTool(),
-            RepoCatalogTool(),
-            # R10: Capability Stack
-            AnalyzeCapabilityStackTool(),
-            # Project Init
-            ProjectInitTool(),
-            ProjectValidateTool(),
         ]
 
     @staticmethod
