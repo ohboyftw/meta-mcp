@@ -241,6 +241,93 @@ When `install_mcp_server` is called for a server with no predefined recipe:
 2. **AI fallback** — searches npm, PyPI, and GitHub for matching packages.
 3. **Ask the user** — if nothing works, returns a message asking for the manual install command.
 
+## Skill Repository Self-Installation
+
+Meta-MCP can install skills **and their associated MCP servers** directly from a local skill repository — like your `D:/Home/claudeSkills/repo`. This is the most efficient way to bootstrap a development environment.
+
+### How it works
+
+Your skill repository is a directory containing skill folders:
+
+```
+D:/Home/claudeSkills/repo/
+├── servers.json          # Optional MCP server definitions
+├── beacon/
+│   ├── SKILL.md          # Skill definition
+│   └── mcp_server.py     # Co-located MCP server
+├── code-graph/
+│   ├── SKILL.md
+│   └── mcp_server.py
+└── ...
+```
+
+Meta-MCP automatically discovers all skills and co-located MCP servers, then installs them in one call.
+
+### Configure your repo
+
+```toml
+# ~/.config/meta-mcp/config.toml
+[skills]
+extra_dirs = ["D:/Home/claudeSkills/repo"]
+```
+
+Or via environment variable:
+```bash
+export META_MCP_SKILLS_DIRS="D:/Home/claudeSkills/repo"
+```
+
+### Available tools
+
+| Tool | Description |
+|------|-------------|
+| `list_repo_skills` | List all skills in the repository |
+| `search_repo` | Search skills + servers by intent |
+| `install_from_repo` | Install a skill (+ its MCP server) |
+| `batch_install_from_repo` | Install multiple skills at once |
+| `list_repo_servers` | List MCP servers defined in the repo |
+| `add_skill_repo` | Add a new repository |
+| `repo_catalog` | Full catalog of all repos, skills, servers |
+
+### Quick start
+
+```python
+# Install a single skill + its MCP server
+install_from_repo(name="beacon")
+
+# Install a complete stack
+batch_install_from_repo(names=["beacon", "code-graph", "expert-panel"])
+
+# Search for what you need
+search_repo(intent="code review")
+```
+
+### How installation works
+
+When you call `install_from_repo("code-graph")`:
+
+1. Copies `D:/Home/claudeSkills/repo/code-graph/SKILL.md` → `.claude/skills/code-graph/SKILL.md`
+2. Copies all skill assets (scripts, templates, etc.)
+3. Detects `mcp_server.py` in the skill directory
+4. Infers the command: `py D:/Home/claudeSkills/repo/code-graph/mcp_server.py`
+5. Writes the MCP server config to `.mcp.json`
+
+### servers.json format
+
+For servers without a co-located `mcp_server.py`, add entries to `servers.json`:
+
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "description": "My MCP server",
+      "install_command": "uvx my-server",
+      "category": "coding",
+      "keywords": ["code", "analysis"]
+    }
+  }
+}
+```
+
 ## Custom Skills
 
 Skills are reusable SKILL.md files that encode workflows, procedures, and domain knowledge for Claude Code.
@@ -302,7 +389,7 @@ Instructions for Claude to follow when this skill is invoked...
 
 ```
 src/meta_mcp/
-  server.py        # FastMCP server — registers all 35 tools
+  server.py        # FastMCP server — registers all 41 tools
   tools.py         # Tool implementations (Tool.apply() -> str)
   tools_base.py    # Base class with auto-naming and schema extraction
   settings.py      # Central config file reader (~/.config/meta-mcp/config.toml)
@@ -317,6 +404,7 @@ src/meta_mcp/
   memory.py        # Installation history and preferences (R7)
   orchestration.py # Live server management (R8)
   skills.py        # Agent Skills management (R9)
+  skill_repo.py    # Skill repository discovery & installation (R9 extension)
   capability_stack.py # 4-layer capability audit (R10)
   project_init.py  # One-call project bootstrap
   models.py        # All Pydantic models

@@ -61,6 +61,14 @@ from .tools import (
     DiscoverPromptsTool,
     # R10: Capability Stack
     AnalyzeCapabilityStackTool,
+    # R9 Extension: Skill Repo
+    ListRepoSkillsTool,
+    InstallFromRepoTool,
+    BatchInstallFromRepoTool,
+    SearchRepoTool,
+    ListRepoServersTool,
+    AddSkillRepoTool,
+    RepoCatalogTool,
     # Project Init
     ProjectInitTool,
     ProjectValidateTool,
@@ -114,6 +122,14 @@ class MetaMCPServer:
             GenerateWorkflowSkillTool(),
             AnalyzeSkillTrustTool(),
             DiscoverPromptsTool(),
+            # R9 Extension: Skill Repo
+            ListRepoSkillsTool(),
+            InstallFromRepoTool(),
+            BatchInstallFromRepoTool(),
+            SearchRepoTool(),
+            ListRepoServersTool(),
+            AddSkillRepoTool(),
+            RepoCatalogTool(),
             # R10: Capability Stack
             AnalyzeCapabilityStackTool(),
             # Project Init

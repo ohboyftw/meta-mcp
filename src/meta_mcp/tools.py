@@ -1119,6 +1119,300 @@ class AnalyzeCapabilityStackTool(Tool):
         return content
 
 
+# ─── Skill Repo Tools (R9 extension) ──────────────────────────────────────────
+
+class ListRepoSkillsTool(Tool):
+    """List all skills available in the configured skill repository (e.g. D:/Home/claudeSkills/repo). Shows name, description, repo source, and whether each skill has an associated MCP server."""
+
+    def __init__(self):
+        super().__init__()
+
+    def apply(self, query: Optional[str] = None) -> str:
+        """
+        List skills available in the skill repository.
+
+        Args:
+            query: Optional search query to filter skills by name/description
+        """
+        from .skill_repo import SkillRepoManager
+
+        manager = SkillRepoManager()
+        repos = manager.list_repos()
+
+        if not repos:
+            return (
+                "No skill repositories configured.\n\n"
+                "To add a repository, set `skills.extra_dirs` in your config file:\n"
+                "    [skills]\n"
+                "    extra_dirs = [\"D:/Home/claudeSkills/repo\"]\n\n"
+                "Or set the environment variable:\n"
+                "    META_MCP_SKILLS_DIRS=D:/Home/claudeSkills/repo"
+            )
+
+        skills = manager.list_available_skills()
+
+        if query:
+            skills = manager.search_skills(query)
+
+        if not skills:
+            return f"No skills found" + (f" matching '{query}'" if query else "")
+
+        content = f"# Skill Repository Catalog\n\n"
+        content += f"**Repositories:** {len(repos)}\n\n"
+
+        for repo in repos:
+            content += f"## {repo['name']} ({repo['path']})\n"
+            content += f"- Skills: {repo['skills_count']} | Servers: {repo['servers_count']}\n\n"
+
+        content += f"## Skills ({len(skills)})\n\n"
+        for skill in skills:
+            mcp_icon = " MCP" if skill.has_mcp_server else ""
+            content += f"### {skill.name}{mcp_icon}\n"
+            content += f"- **Description:** {skill.description[:200]}\n"
+            content += f"- **Source:** {skill.source}\n"
+            if skill.tags:
+                content += f"- **Tags:** {', '.join(skill.tags)}\n"
+            if skill.has_mcp_server:
+                cmd_str = f"{skill.mcp_command} {' '.join(skill.mcp_args or [])}"
+                content += f"- **MCP Server:** `{cmd_str}`\n"
+            content += "\n"
+
+        return content
+
+
+class InstallFromRepoTool(Tool):
+    """Install a skill AND its associated MCP server (if any) from the skill repository. This is the primary tool for bootstrapping capabilities from your local skill repo."""
+
+    def __init__(self):
+        super().__init__()
+
+    def apply(
+        self,
+        name: str,
+        scope: str = "project",
+        install_server: bool = True,
+    ) -> str:
+        """
+        Install a skill from the skill repository.
+
+        Args:
+            name: Skill name to install (e.g. 'beacon', 'code-graph', 'expert-panel')
+            scope: Installation scope - 'project' (default) or 'global'
+            install_server: Also install the co-located MCP server (default: True)
+        """
+        from .skill_repo import SkillRepoManager
+        from .models import SkillScope
+
+        scope_enum = SkillScope.GLOBAL if scope == "global" else SkillScope.PROJECT
+
+        manager = SkillRepoManager()
+        result = manager.install_skill(name, scope=scope_enum, install_server=install_server)
+
+        if "not found" in result.lower():
+            # Suggest alternatives
+            alternatives = manager.search_skills(name)
+            content = f"Skill '{name}' not found in the repository.\n\n"
+            if alternatives:
+                content += f"Did you mean:\n"
+                for alt in alternatives[:5]:
+                    content += f"- {alt.name}\n"
+            else:
+                content += "Use `list_repo_skills` to see all available skills."
+            return content
+
+        return result
+
+
+class BatchInstallFromRepoTool(Tool):
+    """Install multiple skills (and their MCP servers) from the repository in one call. Efficient for setting up a complete development environment."""
+
+    def __init__(self):
+        super().__init__()
+
+    def apply(
+        self,
+        names: List[str],
+        scope: str = "project",
+        install_servers: bool = True,
+    ) -> str:
+        """
+        Batch install skills from the repository.
+
+        Args:
+            names: List of skill names to install (e.g. ['beacon', 'code-graph', 'rlm'])
+            scope: Installation scope - 'project' (default) or 'global'
+            install_servers: Also install co-located MCP servers (default: True)
+        """
+        from .skill_repo import SkillRepoManager
+        from .models import SkillScope
+
+        scope_enum = SkillScope.GLOBAL if scope == "global" else SkillScope.PROJECT
+
+        manager = SkillRepoManager()
+        result = manager.batch_install(names, scope=scope_enum, install_servers=install_servers)
+
+        return result
+
+
+class SearchRepoTool(Tool):
+    """Search both skills AND MCP servers in the repository by intent. Returns matches with descriptions and MCP server availability."""
+
+    def __init__(self):
+        super().__init__()
+
+    def apply(self, intent: str) -> str:
+        """
+        Search the skill repository for skills and servers.
+
+        Args:
+            intent: What you need (e.g. 'code review', 'knowledge base', 'browser automation')
+        """
+        from .skill_repo import SkillRepoManager
+
+        manager = SkillRepoManager()
+
+        skill_results = manager.search_skills(intent)
+        server_results = manager.search_servers(intent)
+
+        if not skill_results and not server_results:
+            return f"No skills or servers found matching '{intent}'."
+
+        content = f"# Search: '{intent}'\n\n"
+
+        if skill_results:
+            content += f"## Skills ({len(skill_results)})\n\n"
+            for s in skill_results[:10]:
+                mcp_icon = " [MCP]" if s.has_mcp_server else ""
+                content += f"- **{s.name}**{mcp_icon}\n  {s.description[:150]}\n\n"
+
+        if server_results:
+            content += f"## MCP Servers ({len(server_results)})\n\n"
+            for s in server_results[:10]:
+                cmd = s.install_command or f"{s.command} {' '.join(s.args)}"
+                content += f"- **{s.name}** [{s.category.value}]\n  {s.description[:150]}\n"
+                if cmd:
+                    content += f"  Install: `{cmd}`\n"
+                content += "\n"
+
+        return content
+
+
+class ListRepoServersTool(Tool):
+    """List MCP servers defined in the skill repository's servers.json. These are the co-located MCP servers that come with skills."""
+
+    def __init__(self):
+        super().__init__()
+
+    def apply(self, query: Optional[str] = None) -> str:
+        """
+        List MCP servers available in the repository.
+
+        Args:
+            query: Optional search query to filter servers
+        """
+        from .skill_repo import SkillRepoManager
+
+        manager = SkillRepoManager()
+        servers = manager.list_available_servers()
+
+        if query:
+            servers = manager.search_servers(query)
+
+        if not servers:
+            return "No servers found in the repository."
+
+        content = f"# Repository MCP Servers ({len(servers)})\n\n"
+        for s in servers:
+            cmd = s.install_command or (f"{s.command} {' '.join(s.args)}" if s.command else "N/A")
+            content += f"## {s.name}\n"
+            content += f"- **Category:** {s.category.value}\n"
+            content += f"- **Description:** {s.description}\n"
+            content += f"- **Install:** `{cmd}`\n"
+            if s.skill_name:
+                content += f"- **Skill:** {s.skill_name}\n"
+            if s.env_vars:
+                content += f"- **Env Vars:** {', '.join(s.env_vars)}\n"
+            content += "\n"
+
+        return content
+
+
+class AddSkillRepoTool(Tool):
+    """Add a local skill repository to meta-mcp's search path. The repository should contain skill directories with SKILL.md files."""
+
+    def __init__(self):
+        super().__init__()
+
+    def apply(self, repo_path: str) -> str:
+        """
+        Add a skill repository to the search path.
+
+        Args:
+            repo_path: Absolute path to the skill repository (e.g. D:/Home/claudeSkills/repo)
+        """
+        from .skill_repo import SkillRepoManager
+
+        manager = SkillRepoManager()
+        try:
+            index = manager.add_repo(repo_path)
+            content = f"# Repository Added\n\n"
+            content += f"**Name:** {index.repo_name}\n"
+            content += f"**Path:** {index.repo_path}\n"
+            content += f"**Skills found:** {len(index.skills)}\n"
+            content += f"**Servers found:** {len(index.servers)}\n"
+            content += "\nSkills and servers are now searchable and installable."
+            return content
+        except ValueError as e:
+            return f"Error: {e}"
+        except Exception as exc:
+            return f"Failed to add repository: {exc}"
+
+
+class RepoCatalogTool(Tool):
+    """Get a complete catalog of all registered repositories, their skills, and MCP servers in a single view."""
+
+    def __init__(self):
+        super().__init__()
+
+    def apply(self) -> str:
+        """
+        Get the full catalog of all skill repositories.
+        """
+        from .skill_repo import SkillRepoManager
+
+        manager = SkillRepoManager()
+        catalog = manager.full_catalog()
+
+        if not catalog["repos"]:
+            return (
+                "No skill repositories configured.\n\n"
+                "Add a repository with:\n"
+                "    add_skill_repo(repo_path='D:/Home/claudeSkills/repo')"
+            )
+
+        content = "# Skill Repository Catalog\n\n"
+
+        for repo in catalog["repos"]:
+            content += f"## {repo['name']}\n"
+            content += f"Path: `{repo['path']}`\n\n"
+
+        content += f"**Total Skills:** {len(catalog['skills'])}\n"
+        content += f"**Total Servers:** {len(catalog['servers'])}\n\n"
+
+        if catalog["skills"]:
+            content += "## All Skills\n\n"
+            for s in catalog["skills"]:
+                mcp = " MCP" if s.get("has_mcp_server") else ""
+                content += f"- **{s['name']}**{mcp} — {s['description'][:100]}\n"
+
+        if catalog["servers"]:
+            content += "\n## All Servers\n\n"
+            for s in catalog["servers"]:
+                content += f"- **{s['name']}** [{s['category']}]: {s['description'][:80]}\n"
+
+        return content
+
+
 # ─── Project Init Tools ───────────────────────────────────────────────────────
 
 class ProjectInitTool(Tool):
