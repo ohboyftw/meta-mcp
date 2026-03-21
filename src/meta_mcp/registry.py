@@ -12,9 +12,9 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -36,42 +36,9 @@ logger = logging.getLogger(__name__)
 
 _REQUEST_TIMEOUT = 10.0  # seconds
 
-_SOURCE_MULTIPLIERS: Dict[str, int] = {
-    "official_registry": 30,
-    "smithery": 25,
-    "awesome_list": 20,
-    "github": 15,
-    "mcp_so": 15,
-    "local_config": 10,
-    "unknown": 5,
-}
-
 # Extra local registry directories via environment variable (path-separator-delimited).
 # Example: META_MCP_REGISTRY_DIRS=D:/Home/my-servers;D:/Home/team-servers
 EXTRA_REGISTRY_ENV_VAR = "META_MCP_REGISTRY_DIRS"
-
-_MULTI_SOURCE_BONUS = 10  # per additional source beyond the first
-
-_STARS_THRESHOLDS: List[Tuple[int, int]] = [
-    # (min_stars, points)
-    (10_000, 20),
-    (1_000, 15),
-    (100, 10),
-    (1, 5),
-    (0, 0),
-]
-
-_RECENT_UPDATE_BONUS = 10
-_SECURITY_SCAN_BONUS = 5
-_DOCUMENTATION_BONUS = 5
-_MAX_TRUST_SCORE = 100
-
-_TRUST_LEVEL_THRESHOLDS: List[Tuple[int, TrustLevel]] = [
-    (80, TrustLevel.OFFICIAL),
-    (60, TrustLevel.VERIFIED),
-    (40, TrustLevel.COMMUNITY),
-    (0, TrustLevel.UNKNOWN),
-]
 
 
 # ---------------------------------------------------------------------------
@@ -423,104 +390,6 @@ class _LocalConfigAdapter(_RegistryAdapter):
 
 
 # ---------------------------------------------------------------------------
-# Trust-score computation
-# ---------------------------------------------------------------------------
-
-def _stars_score(stars: Optional[int]) -> int:
-    """Logarithmic star score, max 20 points."""
-    if not stars or stars <= 0:
-        return 0
-    for threshold, points in _STARS_THRESHOLDS:
-        if stars >= threshold:
-            return points
-    return 0
-
-
-def _trust_level_for(score: int) -> TrustLevel:
-    for threshold, level in _TRUST_LEVEL_THRESHOLDS:
-        if score >= threshold:
-            return level
-    return TrustLevel.UNKNOWN
-
-
-def compute_trust_score(
-    server_name: str,
-    sources: List[str],
-    stars: Optional[int] = None,
-    updated_at: Optional[str] = None,
-    has_security_scan: bool = False,
-    has_documentation: bool = False,
-) -> TrustScore:
-    """Compute a 0-100 trust score for an MCP server.
-
-    Signals
-    -------
-    - Best-source multiplier (max of all sources)   up to 30
-    - Multi-source bonus (+10 per extra source)      variable
-    - GitHub stars (log-scale buckets)               up to 20
-    - Recent update (within 30 days)                 up to 10
-    - Has security scan                              up to  5
-    - Has documentation                              up to  5
-    Total is capped at 100.
-    """
-    signals: Dict[str, Any] = {}
-
-    # Source base score -- take the highest multiplier among all sources
-    source_scores = [_SOURCE_MULTIPLIERS.get(s, _SOURCE_MULTIPLIERS["unknown"]) for s in sources]
-    base = max(source_scores) if source_scores else _SOURCE_MULTIPLIERS["unknown"]
-    signals["source_base"] = base
-
-    # Multi-source bonus
-    extra_sources = max(0, len(set(sources)) - 1)
-    multi_bonus = extra_sources * _MULTI_SOURCE_BONUS
-    signals["multi_source_bonus"] = multi_bonus
-
-    # Stars
-    star_pts = _stars_score(stars)
-    signals["stars"] = {"count": stars or 0, "points": star_pts}
-
-    # Recency
-    recency_pts = 0
-    if updated_at:
-        try:
-            updated_dt = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
-            if (datetime.now(timezone.utc) - updated_dt) <= timedelta(days=30):
-                recency_pts = _RECENT_UPDATE_BONUS
-        except (ValueError, TypeError):
-            logger.debug("Could not parse updated_at %r for %s", updated_at, server_name)
-    signals["recent_update"] = recency_pts
-
-    # Security scan
-    sec_pts = _SECURITY_SCAN_BONUS if has_security_scan else 0
-    signals["security_scan"] = sec_pts
-
-    # Documentation
-    doc_pts = _DOCUMENTATION_BONUS if has_documentation else 0
-    signals["documentation"] = doc_pts
-
-    # Final score
-    raw = base + multi_bonus + star_pts + recency_pts + sec_pts + doc_pts
-    score = min(raw, _MAX_TRUST_SCORE)
-    level = _trust_level_for(score)
-
-    # Human-readable explanation
-    parts: List[str] = [f"base={base} (best source: {sources[0] if sources else 'unknown'})"]
-    if multi_bonus:
-        parts.append(f"multi-source +{multi_bonus}")
-    if star_pts:
-        parts.append(f"stars +{star_pts} ({stars})")
-    if recency_pts:
-        parts.append(f"recent update +{recency_pts}")
-    if sec_pts:
-        parts.append(f"security scan +{sec_pts}")
-    if doc_pts:
-        parts.append(f"documentation +{doc_pts}")
-    explanation = f"Score {score}/{_MAX_TRUST_SCORE} [{level.value}]: " + ", ".join(parts)
-
-    return TrustScore(score=score, level=level, signals=signals, explanation=explanation)
-
-
-# ---------------------------------------------------------------------------
 # RegistryFederation
 # ---------------------------------------------------------------------------
 
@@ -600,16 +469,14 @@ class RegistryFederation:
             sources = list({e["source"] for e in entries})
             merged = self._merge_entries(entries)
 
-            trust = compute_trust_score(
-                server_name=canonical_name,
-                sources=sources,
-                stars=merged.get("stars"),
-                updated_at=merged.get("updated_at"),
-                has_security_scan=merged.get("has_security_scan", False),
-                has_documentation=bool(merged.get("documentation_url")),
+            trust = TrustScore(
+                score=50,
+                level=TrustLevel.COMMUNITY,
+                signals={"source": "aggregated from registry"},
+                explanation="Neutral default — trust scoring removed",
             )
 
-            confidence = "high" if trust.score >= 70 else ("medium" if trust.score >= 40 else "low")
+            confidence = "medium"
             federated.append(FederatedSearchResult(
                 server=canonical_name,
                 sources=sources,
