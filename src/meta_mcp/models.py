@@ -426,13 +426,6 @@ class SkillTrustResult(BaseModel):
     recommendation: str = Field(description="Recommendation")
 
 
-class GeneratedSkill(BaseModel):
-    name: str = Field(description="Generated skill name")
-    path: str = Field(description="Path where SKILL.md was created")
-    workflow_steps: List[str] = Field(description="Workflow steps encoded")
-    required_servers: List[str] = Field(description="Required MCP servers")
-
-
 # ─── AI Fallback Models ───────────────────────────────────────────────────────
 
 class AIInstallationRequest(BaseModel):
