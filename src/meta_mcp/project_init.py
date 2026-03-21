@@ -7,13 +7,16 @@ NOT written as "${VAR}" placeholders (which Claude Code does NOT expand).
 """
 
 import json
+import logging
 import os
-import platform
 import shutil
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from .models import ProjectInitResult, ProjectServerDefinition, ProjectValidateResult
+from .profiles import load_profile, list_profiles, ProfileNotFoundError
+
+logger = logging.getLogger(__name__)
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -28,67 +31,6 @@ def _get_skills_repo() -> str:
     if settings.skills_extra_dirs:
         return str(settings.skills_extra_dirs[0])
     return ""
-
-
-def _get_python_command() -> str:
-    """Returns 'py' on Windows, 'python3' on Unix."""
-    return "py" if platform.system() == "Windows" else "python3"
-
-
-KNOWN_PROJECT_SERVERS: Dict[str, ProjectServerDefinition] = {
-    "beacon": ProjectServerDefinition(
-        name="beacon",
-        description="Static knowledge — hybrid BM25+semantic search across project docs",
-        command=_get_python_command(),
-        args=["{skills_repo}/beacon/mcp_server.py"],
-        category="knowledge",
-    ),
-    "engram": ProjectServerDefinition(
-        name="engram",
-        description="Dynamic memory — decisions, patterns, reasoning traces",
-        command=_get_python_command(),
-        args=["{skills_repo}/engram-memory-skill/mcp_server.py"],
-        env_vars={
-            "ENGRAM_PROJECT_ROOT": "{project_root}",
-            "MEM0_TELEMETRY": "false",
-        },
-        category="knowledge",
-    ),
-    "rlm": ProjectServerDefinition(
-        name="rlm",
-        description="Large-context analysis — sandboxed REPL workspace",
-        command=_get_python_command(),
-        args=["{skills_repo}/rlm-workspace/mcp_server.py"],
-        category="knowledge",
-    ),
-    "llm-council": ProjectServerDefinition(
-        name="llm-council",
-        description="Multi-LLM council for consensus-based decisions",
-        command=_get_python_command(),
-        args=["{skills_repo}/llm-council/mcp_server.py"],
-        required_env_from_os=[
-            "ANTHROPIC_API_KEY",
-            "OPENAI_API_KEY",
-            "GOOGLE_API_KEY",
-            "MINIMAX_API_KEY",
-            "MOONSHOT_API_KEY",
-        ],
-        category="ai",
-    ),
-    "expert-panel": ProjectServerDefinition(
-        name="expert-panel",
-        description="Expert panel for multi-perspective analysis",
-        command=_get_python_command(),
-        args=["{skills_repo}/expert-panel/mcp_server.py"],
-        category="ai",
-    ),
-}
-
-PROFILES: Dict[str, List[str]] = {
-    "knowledge-stack": ["beacon", "engram", "rlm"],
-    "knowledge-stack-full": ["beacon", "engram", "rlm", "llm-council"],
-    "full": ["beacon", "engram", "rlm", "llm-council", "expert-panel"],
-}
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -143,15 +85,25 @@ class ProjectInitializer:
         root = Path(project_root).resolve()
         result = ProjectInitResult()
 
-        # Determine server list
-        server_names = self._resolve_server_list(servers, profile, include_knowledge_stack)
+        # Load profile configuration
+        profile_name = profile or "default"
+        try:
+            profile_config = load_profile(profile_name)
+        except ProfileNotFoundError:
+            logger.warning("Profile '%s' not found, falling back to empty config", profile_name)
+            profile_config = None
 
-        # Build template context
-        context = {
-            "project_root": str(root),
-            "skills_repo": _get_skills_repo(),
-            "home": str(Path.home()),
-        }
+        # Check env_required from profile and warn for missing vars
+        if profile_config and profile_config.env_required and validate_env:
+            missing = [v for v in profile_config.env_required if not os.environ.get(v)]
+            if missing:
+                result.missing_env_vars["_profile"] = missing
+
+        # Determine server list
+        if servers:
+            server_names = servers
+        else:
+            server_names = self._resolve_server_list(profile_name)
 
         # Load existing .mcp.json (merge, don't overwrite)
         mcp_json_path = root / ".mcp.json"
@@ -168,19 +120,10 @@ class ProjectInitializer:
         # Process each server
         new_servers: Dict = {}
         for name in server_names:
-            defn = KNOWN_PROJECT_SERVERS.get(name)
-            if defn is None:
-                result.warnings.append(f"Unknown server '{name}' — skipped")
-                result.servers_skipped.append(name)
-                continue
-
             if name in existing_servers:
                 result.servers_skipped.append(name)
                 continue
 
-            # Build server entry
-            entry = self._build_server_entry(defn, context, validate_env, result)
-            new_servers[name] = entry
             result.servers_configured.append(name)
 
         if not dry_run:
@@ -195,6 +138,10 @@ class ProjectInitializer:
             result.settings_updated = _ensure_settings_flag(root)
         else:
             result.warnings.append("Dry run — no files written")
+
+        # Append post_install messages from profile
+        if profile_config and profile_config.post_install:
+            result.warnings.extend(profile_config.post_install)
 
         return result
 
@@ -256,19 +203,16 @@ class ProjectInitializer:
 
     # ─── Internal helpers ─────────────────────────────────────────────────
 
-    def _resolve_server_list(
-        self,
-        servers: Optional[List[str]],
-        profile: Optional[str],
-        include_knowledge_stack: bool,
-    ) -> List[str]:
-        if servers:
-            return servers
-        if profile:
-            return PROFILES.get(profile, PROFILES["knowledge-stack"])
-        if include_knowledge_stack:
-            return PROFILES["knowledge-stack"]
-        return []
+    def _resolve_server_list(self, profile: Optional[str] = None) -> List[str]:
+        """Resolve which servers to install from a profile name."""
+        if not profile:
+            profile = "default"
+        try:
+            config = load_profile(profile)
+            return [s.name for s in config.servers if s.auto_install]
+        except ProfileNotFoundError:
+            logger.warning("Profile '%s' not found, using empty list", profile)
+            return []
 
     def _build_server_entry(
         self,
