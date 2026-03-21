@@ -244,3 +244,7 @@ class TestFastMCPIntegration:
         # FastMCP stores tools internally; check via list_tools
         # We just verify no exception during registration
         assert len(server.tools) > 0
+
+    def test_tool_count(self, server):
+        """Verify exactly 31 tools registered after scalpel refactor."""
+        assert len(server.tools) == 31, f"Expected 31 tools, got {len(server.tools)}"
