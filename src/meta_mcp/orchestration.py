@@ -11,7 +11,6 @@ import asyncio
 import json
 import logging
 import os
-import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -20,9 +19,6 @@ from .models import (
     DiscoveredTool,
     ServerToolsResult,
     MCPServerStatus,
-    WorkflowExecutionStep,
-    WorkflowExecutionResult,
-    WorkflowStepStatus,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,7 +31,6 @@ _STARTUP_TIMEOUT_S: float = 10.0
 _TOOL_CALL_TIMEOUT_S: float = 30.0
 _SHUTDOWN_GRACE_S: float = 5.0
 _MCP_PROTOCOL_VERSION = "2024-11-05"
-_PREVIOUS_OUTPUT_TOKEN = "$previous"
 
 
 # ---------------------------------------------------------------------------
@@ -95,37 +90,6 @@ async def _read_jsonrpc_response(
             continue
 
         return msg
-
-
-def _substitute_previous_output(
-    arguments: Dict[str, Any],
-    previous_output: Any,
-) -> Dict[str, Any]:
-    """Replace ``$previous`` tokens in *arguments* with *previous_output*.
-
-    Shallow substitution: exact-match string values are replaced directly;
-    values *containing* the token receive the string representation instead.
-    """
-    if previous_output is None:
-        return arguments
-
-    prev_str = (
-        json.dumps(previous_output)
-        if not isinstance(previous_output, str)
-        else previous_output
-    )
-    result: Dict[str, Any] = {}
-    for key, value in arguments.items():
-        if isinstance(value, str):
-            if value == _PREVIOUS_OUTPUT_TOKEN:
-                result[key] = previous_output
-            elif _PREVIOUS_OUTPUT_TOKEN in value:
-                result[key] = value.replace(_PREVIOUS_OUTPUT_TOKEN, prev_str)
-            else:
-                result[key] = value
-        else:
-            result[key] = value
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -400,97 +364,6 @@ class ServerOrchestrator:
             )
 
         return self._extract_tool_output(response.get("result", {}))
-
-    # -- workflow execution --------------------------------------------------
-
-    async def execute_workflow(
-        self,
-        workflow_steps: List[WorkflowExecutionStep],
-        workflow_name: str = "unnamed",
-    ) -> WorkflowExecutionResult:
-        """Execute an ordered sequence of tool calls across one or more servers.
-
-        The ``$previous`` token in step arguments is replaced with the output
-        of the immediately preceding step.  Servers are started automatically
-        if not already running.
-        """
-        logger.info("Executing workflow '%s' with %d step(s)", workflow_name, len(workflow_steps))
-
-        overall_start = time.monotonic()
-        previous_output: Any = None
-        completed_count = 0
-        failed = False
-
-        for idx, step in enumerate(workflow_steps):
-            step_label = f"{workflow_name}[{idx}] {step.server}/{step.tool}"
-            step.status = WorkflowStepStatus.RUNNING
-            step_start = time.monotonic()
-            logger.info("Workflow step %d/%d: %s", idx + 1, len(workflow_steps), step_label)
-
-            try:
-                proc = await self._ensure_server_running(step.server)
-                assert proc.stdin is not None and proc.stdout is not None
-
-                resolved_input = _substitute_previous_output(step.input, previous_output)
-
-                req_id = self._alloc_request_id()
-                proc.stdin.write(_build_jsonrpc_request(
-                    "tools/call",
-                    params={"name": step.tool, "arguments": resolved_input},
-                    request_id=req_id,
-                ))
-                await proc.stdin.drain()
-
-                response = await _read_jsonrpc_response(proc.stdout, timeout=_TOOL_CALL_TIMEOUT_S)
-                elapsed_ms = int((time.monotonic() - step_start) * 1000)
-                step.latency_ms = elapsed_ms
-
-                if "error" in response:
-                    err = response["error"]
-                    error_msg = err.get("message", str(err))
-                    logger.error("Step %s failed: %s", step_label, error_msg)
-                    step.status = WorkflowStepStatus.FAILED
-                    step.error = error_msg
-                    step.output = None
-                    failed = True
-                    break
-
-                output = self._extract_tool_output(response.get("result", {}))
-                step.output = output
-                step.status = WorkflowStepStatus.COMPLETED
-                previous_output = output
-                completed_count += 1
-                logger.info("Step %s completed in %dms", step_label, elapsed_ms)
-
-            except Exception as exc:
-                step.latency_ms = int((time.monotonic() - step_start) * 1000)
-                step.status = WorkflowStepStatus.FAILED
-                step.error = str(exc)
-                logger.exception("Step %s raised an exception", step_label)
-                failed = True
-                break
-
-        # Mark remaining steps as skipped.
-        for remaining in workflow_steps:
-            if remaining.status == WorkflowStepStatus.PENDING:
-                remaining.status = WorkflowStepStatus.SKIPPED
-
-        total_time_ms = int((time.monotonic() - overall_start) * 1000)
-        overall_status = (
-            "completed" if not failed
-            else ("failed" if completed_count == 0 else "partial")
-        )
-
-        logger.info(
-            "Workflow '%s' finished: status=%s, steps=%d/%d, time=%dms",
-            workflow_name, overall_status, completed_count, len(workflow_steps), total_time_ms,
-        )
-        return WorkflowExecutionResult(
-            workflow_name=workflow_name,
-            steps=workflow_steps,
-            overall_status=overall_status,
-            total_time_ms=total_time_ms,
-        )
 
     # -- internal helpers ----------------------------------------------------
 
