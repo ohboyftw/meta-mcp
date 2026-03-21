@@ -1,7 +1,7 @@
 # Meta-MCP Scalpel Refactor — Design Spec
 
 **Date:** 2026-03-22
-**Status:** Draft
+**Status:** Draft (reviewed, issues fixed)
 **Author:** Aravind + Claude
 
 ## 1. Problem Statement
@@ -26,7 +26,7 @@ Specifically:
 - Promote config sync and bootstrap to the hero path
 - Restructure the tool surface from 11 flat areas into 3 clear tiers
 - Replace hardcoded bootstrap profiles with YAML-based profile system
-- Reduce tool count from 39 to 30
+- Reduce tool count from 39 to 31
 
 ## 3. Target Audience
 
@@ -41,41 +41,80 @@ setup. Dogfood-first, open-source second.
 | Module | Tools Removed | Reason |
 |--------|---------------|--------|
 | `intent.py` | `detect_capability_gaps`, `suggest_workflow` | Keyword matching pretending to be NLU. No semantic understanding. Users know what they need. |
-| `memory.py` | `get_installation_history` | Dict wrapper with no actual preference learning or pattern extraction. |
 | `capability_stack.py` | `analyze_capability_stack` | Lists capabilities without cross-layer analysis. Audit without insight. |
 
-### 4.2 Partial Cuts
+### 4.2 Modules Reclassified (Kept but Reduced)
+
+**`memory.py`** — Reclassified from "delete entirely" to "keep as internal
+module, remove its public tool."
+
+`ConversationalMemory` is actively used by surviving tools:
+- `InstallMcpServerTool` (`tools.py:159`) — calls `record_installation()`,
+  `record_failure()`, `check_failure_memory()`
+- `InstallWorkflowTool` (`tools.py:512`) — calls `record_installation()`
+- `GetInstallationHistoryTool` (`tools.py:669`) — this tool is cut
+- `AIFallbackManager` (`ai_fallback.py:19,36`) — calls `ConversationalMemory()`
+
+**Action:** Keep `memory.py` as internal infrastructure. Only remove the
+`GetInstallationHistoryTool` from the public tool surface.
+
+### 4.3 Partial Cuts
 
 | Module | Kept | Cut | Reason |
 |--------|------|-----|--------|
-| `orchestration.py` | `start_server`, `stop_server`, `restart_server`, `discover_server_tools` | `execute_workflow` + helpers (`_chain_results`, `_build_execution_plan`) | Server lifecycle is real. Workflow chaining is a stub — no state passing, no error handling, no rollback. |
-| `registry.py` | `search_federated` (aggregation across 4 registries) | `_compute_trust_score` and trust multiplier constants | Aggregation is valuable. Arbitrary 30-point "official" vs 10-point "local" scoring is theater. |
-| `skills.py` | All skill management (search, list, install, uninstall, trust) | `generate_workflow_skill`, `discover_prompts`, `_KNOWN_SERVER_PROMPTS` dict | Workflow-to-skill generation is half-baked. Prompt discovery is hardcoded patterns, not real MCP prompt enumeration. |
-| `tools.py` | 30 surviving tool classes | 9 tool classes (see section 4.3) | Matches module cuts. |
+| `orchestration.py` | `start_server`, `stop_server`, `restart_server`, `discover_server_tools` | `execute_workflow` method + `_substitute_previous_output` function + `_PREVIOUS_OUTPUT_TOKEN` constant | Server lifecycle is real. Workflow chaining is a stub — no state passing, no error handling, no rollback. |
+| `registry.py` | `search_federated` (aggregation across 4 registries) | `compute_trust_score` function (module-level, line 446) and trust multiplier constants. The `FederatedSearchResult` model's `trust_score` field becomes a stub returning a neutral default. | Aggregation is valuable. Arbitrary scoring is theater. |
+| `skills.py` | All skill management (search, list, install, uninstall, trust), `_KNOWN_SERVER_PROMPTS` (used by `search_capabilities`) | `generate_workflow_skill`, `discover_prompts` | Workflow-to-skill generation is half-baked. Prompt discovery as a standalone tool is cut, but prompt data stays for `search_capabilities`. |
 
-### 4.3 Tool Classes Removed from tools.py
+### 4.4 Tool Classes Removed from tools.py
 
 1. `DetectCapabilityGapsTool` (intent.py)
 2. `SuggestWorkflowTool` (intent.py)
-3. `GetInstallationHistoryTool` (memory.py)
+3. `GetInstallationHistoryTool` (memory.py — module kept, tool removed)
 4. `AnalyzeCapabilityStackTool` (capability_stack.py)
 5. `ExecuteWorkflowTool` (orchestration.py)
 6. `DiscoverPromptsTool` (skills.py)
 7. `GenerateWorkflowSkillTool` (skills.py)
-8. `RepoCatalogTool` (folded into `list_repo_skills` output)
-9. `CheckEcosystemHealthTool` — **keep** (correction: this stays, it's real health checking)
+8. `RepoCatalogTool` (folded into `ListRepoSkillsTool` output)
 
-**Revised cut: 8 tool classes removed. 1 tool (`repo_catalog`) folded into `list_repo_skills`. Net: 39 → 30 tools.**
+**8 tool classes removed, 1 folded. Net: 39 → 31 tools.**
 
-### 4.4 Models Removed from models.py
+### 4.5 Models Removed from models.py
 
-Remove Pydantic models only referenced by deleted modules:
-- `CapabilityGap`
+Remove Pydantic models only referenced by deleted modules (13 models total).
+Verify each has no surviving references before deletion.
+
+**From intent.py (deleted):**
+- `MissingCapability`
+- `CapabilityGapResult`
+- `WorkflowStep`
+- `WorkflowStepStatus` (enum)
 - `WorkflowSuggestion`
-- `InstallationHistoryEntry`
-- `CapabilityStackResult`
 
-Verify no surviving code references them before deletion.
+**From capability_stack.py (deleted):**
+- `CapabilityGap`
+- `CapabilityStackReport`
+- `CapabilityBundleItem`
+- `CapabilityBundleResult`
+- `CapabilityLayer` (enum)
+
+**From orchestration.py (execute_workflow cut):**
+- `WorkflowExecutionStep`
+- `WorkflowExecutionResult`
+
+**From skills.py (methods removed):**
+- `GeneratedSkill`
+
+**Models that survive** (used by surviving code):
+- `InstallationRecord` — used by `memory.py` (kept)
+- `TrustScore`, `FederatedSearchResult` — used by `registry.py` (kept, but
+  `compute_trust_score` is replaced with a neutral default)
+- `MCPPrompt` — used by surviving `search_capabilities` in `skills.py` and
+  by `CapabilitySearchResult` model. Keep alive.
+
+**Note:** `_KNOWN_SERVER_PROMPTS` dict in `skills.py` also survives — it is
+used by the surviving `search_capabilities` method. Only `discover_prompts`
+(the standalone tool) is cut.
 
 ## 5. Restructured Tool Surface
 
@@ -110,7 +149,7 @@ searched, and installed.
 | `list_repo_servers` | List repo's MCP servers |
 | `add_skill_repo` | Add a repo to the search path |
 
-### Tier 3 — Server Lifecycle (14 tools)
+### Tier 3 — Server Lifecycle (15 tools)
 
 Discovery, installation, and runtime management of individual MCP servers.
 
@@ -130,6 +169,9 @@ Discovery, installation, and runtime management of individual MCP servers.
 | `start_server` | Start a server process |
 | `stop_server` | Stop a running server |
 | `restart_server` | Restart a server |
+| `discover_server_tools` | Connect and enumerate a server's tools/prompts/resources |
+
+**Total: 5 + 11 + 15 = 31 tools.**
 
 ## 6. Profile YAML System
 
@@ -216,34 +258,50 @@ post_install:
   - "Add profiles to your skill repo under profiles/*.yaml"
 ```
 
+### 6.7 Error Handling
+
+- **Malformed YAML:** Return clear error including file path and YAML parse
+  error message. Do not fall through to the next profile in the discovery chain.
+- **Profile not found:** Return error listing all searched locations (repo,
+  global, built-in) so the user knows where to put the file.
+- **Unknown skill names:** Passed through to `batch_install_from_repo`, which
+  reports each unknown name as "not found" in its results. No pre-validation.
+- **Missing required fields:** `name` and `description` are required. If absent,
+  return a validation error naming the missing field(s) and file path.
+- **Profile name collision:** First match wins (skill repo > global > built-in).
+  No warning — this is intentional override behavior.
+- **Validation model:** Use a Pydantic `ProfileConfig` model for validation
+  rather than raw dict, consistent with the rest of the codebase.
+
 ## 7. Files Changed
 
 ### 7.1 Deleted
 
 | File | Reason |
 |------|--------|
-| `src/meta_mcp/intent.py` | Module cut |
-| `src/meta_mcp/memory.py` | Module cut |
-| `src/meta_mcp/capability_stack.py` | Module cut |
+| `src/meta_mcp/intent.py` | Module cut — NLU theater |
+| `src/meta_mcp/capability_stack.py` | Module cut — audit without insight |
 
 ### 7.2 Modified
 
 | File | Changes |
 |------|---------|
-| `server.py` | Remove imports/registrations for 8 cut tools. Reorganize remaining 30 with tier comments. |
-| `tools.py` | Delete 8 tool classes. Remove dead imports (`IntentEngine`, `ConversationalMemory`, `CapabilityStack`, `ServerOrchestrator.execute_workflow`). Fold `RepoCatalogTool` output into `ListRepoSkillsTool`. |
-| `orchestration.py` | Delete `execute_workflow` method and helpers. Keep server start/stop/restart/discover. |
-| `registry.py` | Remove `_compute_trust_score` and trust multiplier constants. `search_federated` returns raw aggregated results. |
-| `skills.py` | Remove `generate_workflow_skill`, `discover_prompts`, `_KNOWN_SERVER_PROMPTS`. |
+| `server.py` | Remove imports/registrations for 8 cut tools. Reorganize remaining 31 with tier comments. |
+| `tools.py` | Delete 8 tool classes. Remove dead imports (`IntentEngine`, `CapabilityStack`). **Keep** `ConversationalMemory` import (still used by surviving tools). Fold `RepoCatalogTool` output into `ListRepoSkillsTool`. |
+| `orchestration.py` | Delete `execute_workflow` method, `_substitute_previous_output` function, and `_PREVIOUS_OUTPUT_TOKEN` constant. Keep server start/stop/restart/discover. |
+| `registry.py` | Remove `compute_trust_score` function (module-level, line 446) and trust multiplier constants. Replace call site in `search_federated` with neutral default `TrustScore`. |
+| `skills.py` | Remove `generate_workflow_skill` and `discover_prompts` methods. Keep `_KNOWN_SERVER_PROMPTS` (used by surviving `search_capabilities`). |
+| `memory.py` | **Keep** module. Only remove `get_history()` method (backing the deleted `GetInstallationHistoryTool`). |
+| `ai_fallback.py` | No changes needed (it imports `ConversationalMemory` from `memory.py` which survives). Verify import still resolves after memory.py changes. |
 | `project_init.py` | Replace hardcoded profile dicts with YAML loader. Add profile discovery chain. |
-| `models.py` | Remove `CapabilityGap`, `WorkflowSuggestion`, `InstallationHistoryEntry`, `CapabilityStackResult`. |
-| `README.md` | Rewrite tool reference as 3 tiers. Update counts. Update architecture listing. |
+| `models.py` | Remove 13 models (see section 4.5). Keep `InstallationRecord`, `TrustScore`, `FederatedSearchResult`, `MCPPrompt`. |
+| `README.md` | Rewrite tool reference as 3 tiers. Update counts to 31. Update architecture listing. |
 
 ### 7.3 Added
 
 | File | Purpose |
 |------|---------|
-| `src/meta_mcp/profiles/__init__.py` | `load_profile(name, extra_dirs) -> dict` — profile discovery and YAML loading. |
+| `src/meta_mcp/profiles/__init__.py` | `load_profile(name, extra_dirs) -> ProfileConfig` — profile discovery, YAML loading, Pydantic validation. |
 | `src/meta_mcp/profiles/default.yaml` | Minimal built-in profile. |
 
 ### 7.4 Untouched
@@ -252,16 +310,17 @@ These files are not modified:
 
 `_parsing.py`, `skill_repo.py`, `clients.py`, `config.py`, `discovery.py`,
 `installer.py`, `verification.py`, `project.py`, `tools_base.py`, `settings.py`,
-`cli.py`
+`cli.py`, `gateway.py`, `gateway_registry.py`
 
 ## 8. Test Impact
 
-- Delete test files for removed modules (`test_intent.py`, `test_memory.py`,
+- Delete test files for removed modules (`test_intent.py`,
   `test_capability_stack.py` — if they exist).
-- Update `test_tools.py` to remove references to deleted tool classes.
-- Update `test_server.py` to reflect the 30-tool registration.
+- Update `test_tool_schema.py` to remove references to deleted tool classes
+  and reflect 31-tool registration.
 - Add `test_profiles.py` — test YAML loading, discovery order, missing env
-  warnings, and the default profile.
+  warnings, malformed YAML error, missing required fields, and the default
+  profile.
 - Existing tests for `clients.py`, `skills.py`, `installer.py` should pass
   without modification (verify, don't assume).
 
@@ -271,17 +330,22 @@ These files are not modified:
   stop being advertised. Clients that never used them see no difference.
 - **Config file (`config.toml`) is unchanged.** No settings removed.
 - **`.mcp.json` format unchanged.** Projects using existing configs keep working.
+- **`memory.py` stays as internal module.** Installation tracking continues to
+  work for surviving tools.
 - **`project_init` API change:** The `profile` parameter now expects a YAML
   profile name instead of a hardcoded enum. The `default` profile provides
   backward-compatible minimal behavior.
 
 ## 10. Success Criteria
 
-1. `python -m meta_mcp --stdio` starts and advertises exactly 30 tools.
+1. `python -m meta_mcp --stdio` starts and advertises exactly 31 tools.
 2. `detect_clients` and `sync_configurations` work unchanged.
 3. `project_init(profile="default")` works with built-in YAML.
 4. `project_init(profile="knowledge-stack")` works when the profile YAML exists
    in a configured skill repo.
 5. All surviving tests pass.
-6. README accurately describes the 3-tier tool surface.
-7. No imports of deleted modules remain anywhere in the codebase.
+6. `install_mcp_server` still records to `ConversationalMemory` (memory.py
+   survived as internal module).
+7. README accurately describes the 3-tier tool surface.
+8. No imports of deleted modules (`intent`, `capability_stack`) remain anywhere
+   in the codebase.
