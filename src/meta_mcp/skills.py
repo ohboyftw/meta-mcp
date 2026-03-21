@@ -142,6 +142,14 @@ _BUILTIN_SKILL_REGISTRY: List[Dict[str, Any]] = [
         "trust_score": 65,
         "tags": ["research", "market", "analysis", "competitive"],
     },
+    {
+        "name": "code-review",
+        "description": "Interactive code review orchestrating Code-Graph, Serena, RLM, Expert Panel, and Council for discovery, then presenting findings with AskUserQuestion for user-driven prioritization",
+        "provides": "Structured interactive code review: architecture, code quality, tests, performance — with tool-backed discovery and user-driven action planning",
+        "source": "local",
+        "trust_score": 90,
+        "tags": ["code-review", "quality", "architecture", "testing", "performance", "security"],
+    },
 ]
 
 # Intent-to-category mapping used by search_skills to broaden matches.
@@ -160,6 +168,11 @@ _INTENT_CATEGORY_MAP: Dict[str, List[str]] = {
     "deploy": ["devops", "workflow", "engineering"],
     "test": ["testing", "quality", "engineering"],
     "security": ["security", "code-review", "quality"],
+    "architecture": ["architecture", "code-review", "quality"],
+    "performance": ["performance", "optimization", "code-review"],
+    "audit": ["code-review", "quality", "security"],
+    "tech debt": ["code-review", "quality", "engineering"],
+    "health check": ["code-review", "quality", "testing"],
 }
 
 # Known prompt patterns for common MCP servers (used by discover_prompts).
@@ -340,11 +353,17 @@ class SkillsManager:
     # ── Search ────────────────────────────────────────────────────────────
 
     def search_skills(self, intent: str) -> List[SkillSearchResult]:
-        """Search for skills matching *intent* against the built-in registry.
+        """Search for skills matching *intent* across all sources:
+
+        1. Extra_dirs — skills from configured skill repositories (e.g. D:/Home/claudeSkills/repo)
+        2. Global dir  — ~/.claude/skills/
+        3. Project dir — .claude/skills/
+        4. Built-in registry — hardcoded curated skills
 
         The search considers:
-        1. Direct substring match on name/description/provides.
-        2. Tag overlap via the intent-to-category mapping.
+        - Direct substring match on name/description/tags.
+        - Word-level partial match.
+        - Tag overlap via the intent-to-category mapping.
         """
         intent_lower = intent.lower().strip()
         if not intent_lower:
@@ -357,57 +376,128 @@ class SkillsManager:
                 expanded_tags.update(categories)
 
         scored: List[tuple] = []
-        for entry in _BUILTIN_SKILL_REGISTRY:
-            score = 0
 
-            name_lower = entry["name"].lower()
-            desc_lower = entry["description"].lower()
-            provides_lower = entry["provides"].lower()
+        # ── 1. Extra directories (skill repos) ──────────────────────────────
+        for extra_dir in self.extra_dirs:
+            for skill in self._scan_directory(extra_dir, SkillScope.GLOBAL):
+                score = self._score_skill(skill, intent_lower, expanded_tags)
+                if score > 0:
+                    scored.append((score, skill.name, skill.description, skill.source, "extra"))
 
-            # Direct text matching
-            if intent_lower in name_lower:
-                score += 50
-            if intent_lower in desc_lower:
-                score += 30
-            if intent_lower in provides_lower:
-                score += 20
-
-            # Word-level matching
-            for word in intent_lower.split():
-                if len(word) < 3:
-                    continue
-                if word in name_lower:
-                    score += 15
-                if word in desc_lower:
-                    score += 10
-                if word in provides_lower:
-                    score += 8
-
-            # Tag overlap
-            entry_tags = set(t.lower() for t in entry.get("tags", []))
-            overlap = entry_tags & expanded_tags
-            score += len(overlap) * 12
-
+        # ── 2. Global skills ───────────────────────────────────────────────
+        for skill in self._scan_directory(self.global_dir, SkillScope.GLOBAL):
+            score = self._score_skill(skill, intent_lower, expanded_tags)
             if score > 0:
-                scored.append((score, entry))
+                scored.append((score, skill.name, skill.description, skill.source, "global"))
 
-        # Sort descending by score
-        scored.sort(key=lambda t: t[0], reverse=True)
+        # ── 3. Project skills ─────────────────────────────────────────────
+        for skill in self._scan_directory(self.project_dir, SkillScope.PROJECT):
+            score = self._score_skill(skill, intent_lower, expanded_tags)
+            if score > 0:
+                scored.append((score, skill.name, skill.description, skill.source, "project"))
+
+        # ── 4. Built-in registry ─────────────────────────────────────────
+        for entry in _BUILTIN_SKILL_REGISTRY:
+            score = self._score_skill_entry(entry, intent_lower, expanded_tags)
+            if score > 0:
+                scored.append((score, entry["name"], entry["provides"], entry["source"], "registry"))
+
+        # Deduplicate by name (prefer extra > global > project > registry)
+        # Use real (resolved) paths to collapse symlinks pointing to the same skill
+        seen: Dict[str, tuple] = {}
+
+        for item in scored:
+            score, name, provides, source, scope = item
+            if name not in seen:
+                seen[name] = item
+            else:
+                # Keep higher score, or current scope if scores equal
+                if score > seen[name][0]:
+                    seen[name] = item
+
+        # Sort deduplicated results descending by score
+        seen_list = list(seen.values())
+        seen_list.sort(key=lambda t: t[0], reverse=True)
 
         results: List[SkillSearchResult] = []
-        for _score, entry in scored:
+        for score, name, provides, source, _scope in seen_list:
             results.append(
                 SkillSearchResult(
-                    name=entry["name"],
+                    name=name,
                     skill_type="skill",
-                    provides=entry["provides"],
-                    source=entry["source"],
-                    trust_score=entry.get("trust_score"),
+                    provides=provides,
+                    source=source,
+                    trust_score=None,
                 )
             )
 
         logger.info("search_skills(%r) returned %d results", intent, len(results))
         return results
+
+    def _score_skill(self, skill: AgentSkill, intent: str, expanded_tags: set) -> int:
+        """Score an AgentSkill against an intent string."""
+        score = 0
+        name_lower = skill.name.lower()
+        desc_lower = skill.description.lower()
+
+        # Direct text matching
+        if intent in name_lower:
+            score += 50
+        if intent in desc_lower:
+            score += 30
+
+        # Word-level matching
+        for word in intent.split():
+            if len(word) < 3:
+                continue
+            if word in name_lower:
+                score += 15
+            if word in desc_lower:
+                score += 10
+            # Tag match
+            for tag in skill.tags:
+                if word in tag.lower():
+                    score += 8
+
+        # Tag overlap
+        skill_tags = set(t.lower() for t in skill.tags)
+        overlap = skill_tags & expanded_tags
+        score += len(overlap) * 12
+
+        return score
+
+    def _score_skill_entry(self, entry: Dict[str, Any], intent: str, expanded_tags: set) -> int:
+        """Score a built-in registry entry against an intent string."""
+        score = 0
+        name_lower = entry["name"].lower()
+        desc_lower = entry["description"].lower()
+        provides_lower = entry.get("provides", "").lower()
+
+        # Direct text matching
+        if intent in name_lower:
+            score += 50
+        if intent in desc_lower:
+            score += 30
+        if intent in provides_lower:
+            score += 20
+
+        # Word-level matching
+        for word in intent.split():
+            if len(word) < 3:
+                continue
+            if word in name_lower:
+                score += 15
+            if word in desc_lower:
+                score += 10
+            if word in provides_lower:
+                score += 8
+
+        # Tag overlap
+        entry_tags = set(t.lower() for t in entry.get("tags", []))
+        overlap = entry_tags & expanded_tags
+        score += len(overlap) * 12
+
+        return score
 
     # ── List ──────────────────────────────────────────────────────────────
 
