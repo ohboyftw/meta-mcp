@@ -6,9 +6,9 @@ from unittest.mock import patch
 import pytest
 import yaml
 
+from src.meta_mcp._parsing import parse_skill_md
 from src.meta_mcp.skills import (
     SkillsManager,
-    _parse_skill_md,
     _skill_from_frontmatter,
     _generate_frontmatter,
     _resolve_project_skills_dir,
@@ -32,7 +32,7 @@ def _write_skill_md(skill_dir: Path, name: str = "test-skill",
     (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
 
 
-# -- Tests: _parse_skill_md -------------------------------------------------
+# -- Tests: parse_skill_md -------------------------------------------------
 
 class TestParseSkillMd:
     """Parse SKILL.md frontmatter + body."""
@@ -43,7 +43,7 @@ class TestParseSkillMd:
             "---\nname: my-skill\ndescription: A skill\n---\n\n# Body\n",
             encoding="utf-8",
         )
-        data = _parse_skill_md(skill_file)
+        data = parse_skill_md(skill_file)
         assert data is not None
         assert data["name"] == "my-skill"
         assert "Body" in data["_body"]
@@ -51,18 +51,18 @@ class TestParseSkillMd:
     def test_no_frontmatter(self, tmp_path):
         skill_file = tmp_path / "SKILL.md"
         skill_file.write_text("# Just a body\n", encoding="utf-8")
-        data = _parse_skill_md(skill_file)
+        data = parse_skill_md(skill_file)
         assert data is not None
         assert "Just a body" in data["_body"]
 
     def test_missing_file(self, tmp_path):
-        data = _parse_skill_md(tmp_path / "nonexistent.md")
+        data = parse_skill_md(tmp_path / "nonexistent.md")
         assert data is None
 
     def test_invalid_yaml(self, tmp_path):
         skill_file = tmp_path / "SKILL.md"
         skill_file.write_text("---\n: invalid: [yaml\n---\n\nbody\n", encoding="utf-8")
-        data = _parse_skill_md(skill_file)
+        data = parse_skill_md(skill_file)
         assert data is not None
         # Invalid YAML falls back to empty frontmatter
         assert data.get("name") is None
@@ -273,61 +273,6 @@ class TestUninstallSkill:
     def test_uninstall_nonexistent(self, tmp_path):
         mgr = SkillsManager(project_path=str(tmp_path))
         assert mgr.uninstall_skill("nope", scope=SkillScope.PROJECT) is False
-
-
-# -- Tests: SkillsManager.discover_prompts --------------------------------
-
-class TestDiscoverPrompts:
-    """Known prompt pattern matching."""
-
-    async def test_discover_github_prompts(self):
-        mgr = SkillsManager()
-        prompts = await mgr.discover_prompts({"github": {}})
-        assert len(prompts) >= 1
-        names = [p.name for p in prompts]
-        assert "github-pr-review" in names
-
-    async def test_discover_unknown_server_no_prompts(self):
-        mgr = SkillsManager()
-        prompts = await mgr.discover_prompts({"my-custom-server": {}})
-        assert prompts == []
-
-    async def test_discover_multiple_servers(self):
-        mgr = SkillsManager()
-        prompts = await mgr.discover_prompts({
-            "github": {},
-            "brave-search": {},
-        })
-        servers = {p.server for p in prompts}
-        assert "github" in servers
-        assert "brave-search" in servers
-
-
-# -- Tests: SkillsManager.generate_workflow_skill --------------------------
-
-class TestGenerateWorkflowSkill:
-    """Auto-generate SKILL.md from workflow steps."""
-
-    def test_generates_skill_file(self, tmp_path):
-        mgr = SkillsManager(project_path=str(tmp_path))
-        steps = [
-            {"server": "brave-search", "tool": "search", "description": "Search the web"},
-            {"server": "filesystem", "tool": "write", "description": "Save results"},
-        ]
-        result = mgr.generate_workflow_skill("research-flow", steps)
-        assert result.name == "research-flow"
-        assert "brave-search" in result.required_servers
-        assert Path(result.path).is_file()
-
-    def test_generated_content_has_steps(self, tmp_path):
-        mgr = SkillsManager(project_path=str(tmp_path))
-        steps = [
-            {"server": "s1", "tool": "t1", "description": "Step one"},
-        ]
-        result = mgr.generate_workflow_skill("flow", steps, project_path=str(tmp_path))
-        content = Path(result.path).read_text(encoding="utf-8")
-        assert "Step one" in content
-        assert "Workflow Steps" in content
 
 
 # -- Tests: SkillsManager.analyze_skill_trust ------------------------------

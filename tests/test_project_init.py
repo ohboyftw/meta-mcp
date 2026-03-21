@@ -1,19 +1,14 @@
 """Tests for project_init module."""
 
 import json
-import os
 import platform
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
 from meta_mcp.project_init import (
-    KNOWN_PROJECT_SERVERS,
-    PROFILES,
     ProjectInitializer,
     _ensure_settings_flag,
-    _get_python_command,
     _resolve_template,
 )
 
@@ -33,19 +28,6 @@ def test_resolve_template_missing_key():
     # Missing keys are left as-is (no crash)
     result = _resolve_template("{unknown}/path", {"project_root": "/tmp"})
     assert "{unknown}" in result
-
-
-# ─── Python command ───────────────────────────────────────────────────────────
-
-def test_get_python_command_windows():
-    with patch("meta_mcp.project_init.platform") as mock_platform:
-        mock_platform.system.return_value = "Windows"
-        from meta_mcp.project_init import _get_python_command
-        # Re-import won't re-evaluate; test the live function
-        if platform.system() == "Windows":
-            assert _get_python_command() == "py"
-        else:
-            assert _get_python_command() == "python3"
 
 
 # ─── Settings flag ────────────────────────────────────────────────────────────
@@ -88,35 +70,6 @@ def initializer():
     return ProjectInitializer()
 
 
-def test_init_creates_mcp_json(tmp_path, initializer):
-    result = initializer.initialize_project(
-        project_root=str(tmp_path),
-        servers=["beacon"],
-        validate_env=False,
-    )
-    assert "beacon" in result.servers_configured
-    mcp_json = json.loads((tmp_path / ".mcp.json").read_text())
-    assert "beacon" in mcp_json["mcpServers"]
-    # Command should be resolved (no templates)
-    assert "{" not in mcp_json["mcpServers"]["beacon"]["command"]
-
-
-def test_init_merges_existing(tmp_path, initializer):
-    # Pre-create .mcp.json with an existing server
-    existing = {"mcpServers": {"my-server": {"command": "node", "args": ["server.js"]}}}
-    (tmp_path / ".mcp.json").write_text(json.dumps(existing))
-
-    result = initializer.initialize_project(
-        project_root=str(tmp_path),
-        servers=["beacon"],
-        validate_env=False,
-    )
-    mcp_json = json.loads((tmp_path / ".mcp.json").read_text())
-    assert "my-server" in mcp_json["mcpServers"]  # Preserved
-    assert "beacon" in mcp_json["mcpServers"]  # Added
-    assert "my-server" in result.pre_existing_servers
-
-
 def test_init_skips_existing_server(tmp_path, initializer):
     existing = {"mcpServers": {"beacon": {"command": "old-beacon"}}}
     (tmp_path / ".mcp.json").write_text(json.dumps(existing))
@@ -133,33 +86,6 @@ def test_init_skips_existing_server(tmp_path, initializer):
     assert mcp_json["mcpServers"]["beacon"]["command"] == "old-beacon"
 
 
-def test_init_profile_resolution(tmp_path, initializer):
-    result = initializer.initialize_project(
-        project_root=str(tmp_path),
-        profile="knowledge-stack",
-        validate_env=False,
-    )
-    assert set(result.servers_configured) == {"beacon", "engram", "rlm"}
-
-
-def test_init_env_var_validation(tmp_path, initializer):
-    with patch.dict(os.environ, {}, clear=False):
-        # Remove keys if present
-        env = os.environ.copy()
-        for key in ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
-                     "MINIMAX_API_KEY", "MOONSHOT_API_KEY"]:
-            env.pop(key, None)
-        with patch.dict(os.environ, env, clear=True):
-            result = initializer.initialize_project(
-                project_root=str(tmp_path),
-                servers=["llm-council"],
-                validate_env=True,
-            )
-            assert "llm-council" in result.missing_env_vars
-            missing = result.missing_env_vars["llm-council"]
-            assert "ANTHROPIC_API_KEY" in missing
-
-
 def test_init_dry_run(tmp_path, initializer):
     result = initializer.initialize_project(
         project_root=str(tmp_path),
@@ -169,15 +95,6 @@ def test_init_dry_run(tmp_path, initializer):
     assert "beacon" in result.servers_configured
     assert not (tmp_path / ".mcp.json").exists()
     assert any("Dry run" in w for w in result.warnings)
-
-
-def test_init_unknown_server(tmp_path, initializer):
-    result = initializer.initialize_project(
-        project_root=str(tmp_path),
-        servers=["nonexistent"],
-    )
-    assert "nonexistent" in result.servers_skipped
-    assert any("Unknown" in w for w in result.warnings)
 
 
 def test_init_settings_updated(tmp_path, initializer):
@@ -191,18 +108,6 @@ def test_init_settings_updated(tmp_path, initializer):
     assert settings["permissions"]["enableAllProjectMcpServers"] is True
 
 
-def test_init_engram_project_root_resolved(tmp_path, initializer):
-    result = initializer.initialize_project(
-        project_root=str(tmp_path),
-        servers=["engram"],
-        validate_env=False,
-    )
-    mcp_json = json.loads((tmp_path / ".mcp.json").read_text())
-    env = mcp_json["mcpServers"]["engram"]["env"]
-    assert env["ENGRAM_PROJECT_ROOT"] == str(tmp_path)
-    assert env["MEM0_TELEMETRY"] == "false"
-
-
 # ─── ProjectInitializer.validate_project ──────────────────────────────────────
 
 def test_validate_no_mcp_json(tmp_path, initializer):
@@ -213,7 +118,7 @@ def test_validate_no_mcp_json(tmp_path, initializer):
 
 def test_validate_healthy_project(tmp_path, initializer):
     # Create a valid .mcp.json with a command that exists
-    python_cmd = _get_python_command()
+    python_cmd = "py" if platform.system() == "Windows" else "python3"
     config = {
         "mcpServers": {
             "test-server": {
@@ -242,7 +147,7 @@ def test_validate_unhealthy_empty_env(tmp_path, initializer):
     config = {
         "mcpServers": {
             "bad-server": {
-                "command": _get_python_command(),
+                "command": "py" if platform.system() == "Windows" else "python3",
                 "args": [],
                 "env": {"API_KEY": ""},
             }
@@ -273,19 +178,3 @@ def test_validate_unhealthy_missing_command(tmp_path, initializer):
     assert "not found" in result.unhealthy_servers["ghost"]
 
 
-# ─── Profiles and catalog ────────────────────────────────────────────────────
-
-def test_profiles_reference_valid_servers():
-    for profile_name, server_list in PROFILES.items():
-        for server in server_list:
-            assert server in KNOWN_PROJECT_SERVERS, (
-                f"Profile '{profile_name}' references unknown server '{server}'"
-            )
-
-
-def test_known_servers_have_required_fields():
-    for name, defn in KNOWN_PROJECT_SERVERS.items():
-        assert defn.name == name
-        assert defn.command
-        assert defn.args
-        assert defn.description

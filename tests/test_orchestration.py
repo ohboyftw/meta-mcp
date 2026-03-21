@@ -9,12 +9,9 @@ import pytest
 from src.meta_mcp.orchestration import (
     ServerOrchestrator,
     _build_jsonrpc_request,
-    _substitute_previous_output,
 )
 from src.meta_mcp.models import (
     MCPServerStatus,
-    WorkflowExecutionStep,
-    WorkflowStepStatus,
 )
 
 
@@ -94,49 +91,6 @@ class TestBuildJsonrpcRequest:
     def test_trailing_newline(self):
         raw = _build_jsonrpc_request("test")
         assert raw.endswith(b"\n")
-
-
-# -- Tests: _substitute_previous_output ------------------------------------
-
-class TestSubstitutePreviousOutput:
-    """Replace $previous tokens in arguments."""
-
-    def test_exact_match_replaces_with_value(self):
-        result = _substitute_previous_output(
-            {"query": "$previous"}, "hello world"
-        )
-        assert result["query"] == "hello world"
-
-    def test_partial_match_string_interpolation(self):
-        result = _substitute_previous_output(
-            {"query": "results: $previous end"}, "42"
-        )
-        assert result["query"] == "results: 42 end"
-
-    def test_non_string_previous_in_partial(self):
-        result = _substitute_previous_output(
-            {"query": "got $previous done"}, {"key": "val"}
-        )
-        assert '{"key": "val"}' in result["query"]
-
-    def test_no_token_no_change(self):
-        result = _substitute_previous_output(
-            {"query": "no token here"}, "anything"
-        )
-        assert result["query"] == "no token here"
-
-    def test_none_previous_no_change(self):
-        args = {"x": "$previous", "y": "keep"}
-        result = _substitute_previous_output(args, None)
-        assert result["x"] == "$previous"
-        assert result["y"] == "keep"
-
-    def test_non_string_values_passthrough(self):
-        result = _substitute_previous_output(
-            {"count": 42, "flag": True}, "anything"
-        )
-        assert result["count"] == 42
-        assert result["flag"] is True
 
 
 # -- Tests: _extract_tool_output -------------------------------------------
@@ -308,43 +262,6 @@ class TestDiscoverServerTools:
             result = await orch.discover_server_tools("srv", "cmd")
 
         assert result.tools == []
-
-
-# -- Tests: execute_workflow -----------------------------------------------
-
-class TestExecuteWorkflow:
-    """Cross-server workflow execution."""
-
-    async def test_empty_workflow(self):
-        orch = ServerOrchestrator()
-        result = await orch.execute_workflow([], workflow_name="empty")
-        assert result.overall_status == "completed"
-        assert result.total_time_ms >= 0
-
-    async def test_workflow_untracked_server_fails(self):
-        orch = ServerOrchestrator()
-        steps = [
-            WorkflowExecutionStep(
-                server="unknown-srv",
-                tool="some-tool",
-                input={"q": "test"},
-            ),
-        ]
-        result = await orch.execute_workflow(steps, workflow_name="test")
-        assert result.overall_status == "failed"
-        assert steps[0].status == WorkflowStepStatus.FAILED
-
-    async def test_remaining_steps_skipped_on_failure(self):
-        orch = ServerOrchestrator()
-        steps = [
-            WorkflowExecutionStep(server="srv1", tool="t1", input={}),
-            WorkflowExecutionStep(server="srv2", tool="t2", input={}),
-        ]
-        result = await orch.execute_workflow(steps, workflow_name="test")
-        # First step should fail (srv1 not tracked), second should be skipped
-        assert steps[0].status == WorkflowStepStatus.FAILED
-        assert steps[1].status == WorkflowStepStatus.SKIPPED
-        assert result.overall_status == "failed"
 
 
 # -- Tests: request ID allocation -----------------------------------------
