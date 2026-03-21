@@ -31,6 +31,12 @@ from .models import (
     SkillSearchResult,
     SkillTrustResult,
 )
+from ._parsing import (
+    FRONTMATTER_DELIMITER,
+    coerce_list,
+    normalise_name,
+    parse_skill_md,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +48,6 @@ PROJECT_SKILLS_DIR_NAME = ".claude/skills"
 # Extra skill directories via environment variable (path-separator-delimited).
 # Example: META_MCP_SKILLS_DIRS=D:/Home/claudeSkills;D:/Home/other-skills
 EXTRA_SKILLS_ENV_VAR = "META_MCP_SKILLS_DIRS"
-
-FRONTMATTER_DELIMITER = "---"
 
 # Dangerous patterns used during skill trust analysis.  Each entry is a tuple
 # of (compiled regex, human-readable description, severity weight 0-30).
@@ -227,48 +231,6 @@ _KNOWN_SERVER_PROMPTS: Dict[str, List[Dict[str, Any]]] = {
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def _parse_skill_md(path: Path) -> Optional[Dict[str, Any]]:
-    """Parse a SKILL.md file, returning frontmatter dict and body text.
-
-    Returns ``None`` when the file cannot be read or parsed.  The returned
-    dict always contains at minimum ``_body`` (the markdown below the
-    frontmatter) and ``_path`` (the resolved file path).
-    """
-    try:
-        content = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        logger.warning("Cannot read skill file %s: %s", path, exc)
-        return None
-
-    frontmatter: Dict[str, Any] = {}
-    body = content
-
-    stripped = content.strip()
-    if stripped.startswith(FRONTMATTER_DELIMITER):
-        parts = stripped.split(FRONTMATTER_DELIMITER, 2)
-        # parts[0] is empty string before first ---, parts[1] is YAML, parts[2] is body
-        if len(parts) >= 3:
-            try:
-                frontmatter = yaml.safe_load(parts[1]) or {}
-            except yaml.YAMLError as exc:
-                logger.warning("Invalid YAML frontmatter in %s: %s", path, exc)
-                frontmatter = {}
-            body = parts[2].strip()
-
-    frontmatter["_body"] = body
-    frontmatter["_path"] = str(path.resolve())
-    return frontmatter
-
-
-def _coerce_list(value: Any) -> List[str]:
-    """Coerce a value to a list of strings (handles comma-separated strings)."""
-    if isinstance(value, list):
-        return value
-    if isinstance(value, str):
-        return [item.strip() for item in value.split(",") if item.strip()]
-    return []
-
-
 def _skill_from_frontmatter(data: Dict[str, Any], scope: SkillScope) -> AgentSkill:
     """Build an ``AgentSkill`` model from parsed frontmatter."""
     return AgentSkill(
@@ -278,10 +240,10 @@ def _skill_from_frontmatter(data: Dict[str, Any], scope: SkillScope) -> AgentSki
         source=data.get("source", "local"),
         version=data.get("version"),
         auto_invocation=not data.get("disable-model-invocation", False),
-        allowed_tools=_coerce_list(data.get("allowed-tools", [])),
+        allowed_tools=coerce_list(data.get("allowed-tools", [])),
         scope=scope,
-        required_servers=_coerce_list(data.get("required-servers", [])),
-        tags=_coerce_list(data.get("tags", [])),
+        required_servers=coerce_list(data.get("required-servers", [])),
+        tags=coerce_list(data.get("tags", [])),
     )
 
 
@@ -402,8 +364,9 @@ class SkillsManager:
             if score > 0:
                 scored.append((score, entry["name"], entry["provides"], entry["source"], "registry"))
 
-        # Deduplicate by name (prefer extra > global > project > registry)
-        # Use real (resolved) paths to collapse symlinks pointing to the same skill
+        # Deduplicate by name — highest score wins.  On equal scores the first
+        # occurrence is kept, which respects the search order
+        # (extra > global > project > registry) by insertion priority.
         seen: Dict[str, tuple] = {}
 
         for item in scored:
@@ -540,7 +503,7 @@ class SkillsManager:
             skill_file = child / "SKILL.md"
             if not skill_file.is_file():
                 continue
-            data = _parse_skill_md(skill_file)
+            data = parse_skill_md(skill_file)
             if data is not None:
                 skills.append(_skill_from_frontmatter(data, scope))
 
@@ -572,7 +535,7 @@ class SkillsManager:
 
         if skill_file.exists():
             logger.info("Skill %r already installed at %s", name, skill_dir)
-            data = _parse_skill_md(skill_file)
+            data = parse_skill_md(skill_file)
             if data is not None:
                 return _skill_from_frontmatter(data, scope)
 
@@ -591,7 +554,7 @@ class SkillsManager:
             self._install_from_registry(name, source, skill_dir, skill_file)
 
         # Parse the newly written SKILL.md to return a model
-        data = _parse_skill_md(skill_file)
+        data = parse_skill_md(skill_file)
         if data is None:
             raise RuntimeError(f"Failed to parse newly installed skill at {skill_file}")
 
@@ -768,7 +731,7 @@ class SkillsManager:
                 skill_file = child / "SKILL.md"
                 if not skill_file.is_file():
                     continue
-                data = _parse_skill_md(skill_file)
+                data = parse_skill_md(skill_file)
                 if data is None:
                     continue
 
@@ -911,7 +874,7 @@ class SkillsManager:
         if path.is_dir():
             path = path / "SKILL.md"
 
-        data = _parse_skill_md(path)
+        data = parse_skill_md(path)
         if data is None:
             return SkillTrustResult(
                 skill_name=path.parent.name,
@@ -1140,10 +1103,4 @@ class SkillsManager:
     @staticmethod
     def _normalise_name(name: str) -> str:
         """Normalise a skill name to a filesystem-safe directory name."""
-        # Strip common path prefixes (e.g. "anthropics/skills/code-review")
-        basename = name.rsplit("/", 1)[-1] if "/" in name else name
-        # Replace non-alphanumeric characters with hyphens
-        safe = re.sub(r"[^a-zA-Z0-9_-]", "-", basename)
-        # Collapse repeated hyphens and strip leading/trailing ones
-        safe = re.sub(r"-+", "-", safe).strip("-")
-        return safe.lower() or "unnamed-skill"
+        return normalise_name(name)

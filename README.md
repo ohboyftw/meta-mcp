@@ -1,6 +1,53 @@
-# Meta MCP Server
+<p align="center">
+<pre>
+                ___  ___     _          ___  ___ _____ ____
+               |  \/  |    | |         |  \/  |/  __ \  _ \
+               | .  . | ___| |_ __ _   | .  . || /  \/ |_) |
+               | |\/| |/ _ \ __/ _` |  | |\/| || |   |  __/
+               | |  | |  __/ || (_| |  | |  | || \__/\ |
+               \_|  |_/\___|\__\__,_|  \_|  |_/ \____/_|
+</pre>
+</p>
 
-An MCP server that manages other MCP servers. Discovers, installs, configures, and orchestrates MCP servers across multiple clients (Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, Zed) from a single interface.
+<p align="center">
+  <strong>The MCP server that manages all your other MCP servers.</strong>
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick Start</a> &bull;
+  <a href="#features">Features</a> &bull;
+  <a href="#tool-reference">Tool Reference</a> &bull;
+  <a href="#client-support">Client Support</a> &bull;
+  <a href="#configuration">Configuration</a> &bull;
+  <a href="#architecture">Architecture</a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/protocol-MCP-8A2BE2?style=flat-square" alt="MCP Protocol">
+  <img src="https://img.shields.io/badge/tools-39-green?style=flat-square" alt="39 Tools">
+  <img src="https://img.shields.io/badge/clients-6-orange?style=flat-square" alt="6 Clients">
+  <img src="https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square" alt="MIT License">
+</p>
+
+---
+
+Meta MCP is a single MCP server that discovers, installs, configures, and orchestrates your entire MCP ecosystem. Register it once — your AI assistant handles the rest.
+
+```
+  You                          Meta MCP                        Your MCP Servers
+  ───                          ────────                        ───────────────
+   │                              │                                  │
+   │  "I need a database tool"    │                                  │
+   │─────────────────────────────>│                                  │
+   │                              │──> Search registries             │
+   │                              │──> Find best match               │
+   │                              │──> Install & configure ─────────>│
+   │                              │──> Verify health ───────────────>│
+   │                              │<── All systems go ───────────────│
+   │  "Done. postgres-mcp ready"  │                                  │
+   │<─────────────────────────────│                                  │
+```
 
 ## Quick Start
 
@@ -16,28 +63,51 @@ An MCP server that manages other MCP servers. Discovers, installs, configures, a
 bash scripts/install.sh
 ```
 
-Both scripts will:
-1. Install meta-mcp in editable mode (`pip install -e .`)
-2. Register it as a user-level MCP server in `~/.claude.json`
-3. Verify the installation works
-
-Restart Claude Code after running.
+Both scripts install meta-mcp in editable mode, register it as a user-level MCP server in `~/.claude.json`, and verify the installation. Restart Claude Code after running.
 
 ### Manual install
 
 ```bash
-# 1. Install the package
 pip install -e .
-
-# 2. Register with Claude Code (user scope)
 claude mcp add -s user meta-mcp -- python -m meta_mcp --stdio
 ```
 
-## What It Does
+---
 
-Meta MCP exposes 35 tools across 10 capability areas. Once registered, your AI assistant can use these tools to manage its own MCP ecosystem.
+## Features
 
-### Core — Server lifecycle
+### Discover & Install
+
+Search across the Official MCP Registry, Smithery, mcp.so, and your own local catalogs. Install with auto-detected commands, fallback chains, and zero manual config.
+
+### Multi-Client Sync
+
+Detect all MCP clients on your machine — Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, Zed — and keep their configurations in lockstep.
+
+### Live Orchestration
+
+Start, stop, restart, and health-check running MCP servers. Chain tool calls across multiple servers in executable workflows.
+
+### Agent Skills
+
+Discover, install, and manage reusable SKILL.md files that encode workflows, procedures, and domain knowledge. Trust-score skills before installation.
+
+### Skill Repository
+
+Bootstrap entire development environments from a local skill repo. One call installs skills and their co-located MCP servers together.
+
+### Capability Stack Audit
+
+Audit all four layers of your agent's capabilities — Tools, Prompts, Skills, and Context — in a single view. Find gaps before they become blockers.
+
+---
+
+## Tool Reference
+
+39 tools across 11 capability areas.
+
+<details>
+<summary><strong>Core &mdash; Server Lifecycle</strong> (8 tools)</summary>
 
 | Tool | Description |
 |------|-------------|
@@ -50,46 +120,67 @@ Meta MCP exposes 35 tools across 10 capability areas. Once registered, your AI a
 | `get_manager_stats` | Ecosystem statistics |
 | `refresh_server_cache` | Refresh the discovery cache |
 
-### Intent Resolution (R1)
+</details>
+
+<details>
+<summary><strong>Intent Resolution</strong> (2 tools)</summary>
 
 | Tool | Description |
 |------|-------------|
 | `detect_capability_gaps` | Analyze a task and identify missing MCP servers |
 | `suggest_workflow` | Generate a multi-server workflow plan for a goal |
 
-### Verification (R3)
+</details>
+
+<details>
+<summary><strong>Verification</strong> (1 tool)</summary>
 
 | Tool | Description |
 |------|-------------|
 | `check_ecosystem_health` | Probe all servers — status, latency, fix suggestions |
 
-### Project Context (R4)
+</details>
+
+<details>
+<summary><strong>Project Context</strong> (2 tools)</summary>
 
 | Tool | Description |
 |------|-------------|
 | `analyze_project_context` | Detect language, framework, services; recommend servers |
 | `install_workflow` | Batch install multiple servers in one flow |
 
-### Registry Federation (R5)
+</details>
+
+<details>
+<summary><strong>Registry Federation</strong> (1 tool)</summary>
 
 | Tool | Description |
 |------|-------------|
 | `search_federated` | Search Official Registry, Smithery, mcp.so with trust scoring |
 
-### Multi-Client Configuration (R6)
+</details>
+
+<details>
+<summary><strong>Multi-Client Configuration</strong> (2 tools)</summary>
 
 | Tool | Description |
 |------|-------------|
 | `detect_clients` | Find installed MCP clients on this machine |
 | `sync_configurations` | Detect and repair config drift across clients |
 
-### Memory (R7)
+</details>
+
+<details>
+<summary><strong>Memory</strong> (1 tool)</summary>
 
 | Tool | Description |
 |------|-------------|
 | `get_installation_history` | Installation history and learned preferences |
 
-### Live Orchestration (R8)
+</details>
+
+<details>
+<summary><strong>Live Orchestration</strong> (5 tools)</summary>
 
 | Tool | Description |
 |------|-------------|
@@ -99,7 +190,10 @@ Meta MCP exposes 35 tools across 10 capability areas. Once registered, your AI a
 | `discover_server_tools` | Connect and enumerate a server's tools/prompts/resources |
 | `execute_workflow` | Chain tool calls across multiple servers |
 
-### Agent Skills (R9)
+</details>
+
+<details>
+<summary><strong>Agent Skills</strong> (7 tools)</summary>
 
 | Tool | Description |
 |------|-------------|
@@ -111,37 +205,56 @@ Meta MCP exposes 35 tools across 10 capability areas. Once registered, your AI a
 | `analyze_skill_trust` | Security analysis: prompt injection, broad permissions |
 | `discover_prompts` | Surface MCP Prompts from configured servers |
 
-### Capability Stack (R10)
+</details>
+
+<details>
+<summary><strong>Skill Repository</strong> (7 tools)</summary>
 
 | Tool | Description |
 |------|-------------|
-| `analyze_capability_stack` | Audit all 4 layers (Tools, Prompts, Skills, Context) |
+| `list_repo_skills` | List all skills in the repository |
+| `search_repo` | Search skills + servers by intent |
+| `install_from_repo` | Install a skill and its co-located MCP server |
+| `batch_install_from_repo` | Install multiple skills at once |
+| `list_repo_servers` | List MCP servers defined in the repo |
+| `add_skill_repo` | Add a new skill repository to the search path |
+| `repo_catalog` | Full catalog of all repos, skills, and servers |
 
-### Project Init
+</details>
+
+<details>
+<summary><strong>Project Init & Capability Stack</strong> (3 tools)</summary>
 
 | Tool | Description |
 |------|-------------|
 | `project_init` | Bootstrap a project's `.mcp.json` in one call |
 | `project_validate` | Validate a project's MCP setup health |
+| `analyze_capability_stack` | Audit all 4 layers (Tools, Prompts, Skills, Context) |
+
+</details>
+
+---
 
 ## Client Support
 
-Meta MCP can detect and write configuration for:
+Meta MCP detects and writes configuration for 6 clients:
 
-| Client | Config file | Notes |
-|--------|------------|-------|
-| Claude Code | `~/.claude.json` (user) / `.mcp.json` (project) | Requires `"type": "stdio"` |
-| Claude Desktop | `claude_desktop_config.json` | Platform-specific path |
-| Cursor | `~/.cursor/mcp.json` | |
-| VS Code | `~/.vscode/mcp.json` | Also checks workspace |
-| Windsurf | `~/.windsurf/mcp.json` | Also checks `~/.codeium/windsurf/` |
-| Zed | `~/.config/zed/settings.json` | Uses `context_servers` key |
+| Client | Config File | Notes |
+|--------|-------------|-------|
+| **Claude Code** | `~/.claude.json` / `.mcp.json` | Requires `"type": "stdio"` |
+| **Claude Desktop** | `claude_desktop_config.json` | Platform-specific path |
+| **Cursor** | `~/.cursor/mcp.json` | |
+| **VS Code** | `~/.vscode/mcp.json` | Also checks workspace settings |
+| **Windsurf** | `~/.windsurf/mcp.json` | Also checks `~/.codeium/windsurf/` |
+| **Zed** | `~/.config/zed/settings.json` | Uses `context_servers` key |
 
 Use `detect_clients` to see what's installed, and `sync_configurations` to keep them in lockstep.
 
+---
+
 ## Configuration
 
-Meta MCP reads settings from a TOML config file, with environment variable overrides for backward compatibility.
+Meta MCP reads settings from a TOML config file with environment variable overrides.
 
 ### Config file location
 
@@ -150,40 +263,34 @@ Meta MCP reads settings from a TOML config file, with environment variable overr
 | Linux / macOS | `~/.config/meta-mcp/config.toml` |
 | Windows | `%APPDATA%\meta-mcp\config.toml` |
 
-The install scripts create a default config file automatically. You can also create one manually.
+The install scripts create a default config file automatically.
 
-### Config file reference
+### Reference
 
 ```toml
 # ~/.config/meta-mcp/config.toml
 
 [registry]
-# Extra directories containing server definitions (.mcp.json, servers.json, or per-server .json)
 extra_dirs = ["~/my-servers", "~/team-servers"]
 
 [skills]
-# Extra directories containing SKILL.md skill folders
-extra_dirs = ["~/claudeSkills/Repo"]
+extra_dirs = ["~/claudeSkills/repo"]
 
 [github]
-# GitHub token for higher API rate limits during discovery
 token = "ghp_..."
 
 [install]
-# Default target clients for install_mcp_server
 default_clients = ["claude_code"]
 ```
 
 ### Environment variable overrides
 
-Environment variables take priority over the config file when set:
-
-| Env var | Overrides | Format |
-|---------|-----------|--------|
-| `META_MCP_REGISTRY_DIRS` | `registry.extra_dirs` | Path-separator-delimited list (`;` on Windows, `:` on POSIX) |
-| `META_MCP_SKILLS_DIRS` | `skills.extra_dirs` | Path-separator-delimited list |
+| Variable | Overrides | Format |
+|----------|-----------|--------|
+| `META_MCP_REGISTRY_DIRS` | `registry.extra_dirs` | Path-separator-delimited |
+| `META_MCP_SKILLS_DIRS` | `skills.extra_dirs` | Path-separator-delimited |
 | `GITHUB_TOKEN` | `github.token` | Token string |
-| `CLAUDE_SKILLS_REPO` | First entry of `skills.extra_dirs` (used by `project_init`) | Single path |
+| `CLAUDE_SKILLS_REPO` | First entry of `skills.extra_dirs` | Single path |
 
 ### Transport modes
 
@@ -191,24 +298,75 @@ Environment variables take priority over the config file when set:
 |------|-------------|
 | `--stdio` | (Default) Stdio transport for Claude Code / Claude Desktop |
 | `--http` | HTTP/SSE transport for remote or multi-client access |
-| `--gateway` | Gateway mode — exposes all 35 tools |
+| `--gateway` | Gateway mode — exposes all tools |
 
-Example registration (user scope):
 ```bash
 claude mcp add -s user meta-mcp -- python -m meta_mcp --stdio --gateway
 ```
 
+---
+
+## Skill Repository
+
+Bootstrap an entire development environment from a local skill repo. Skills and their co-located MCP servers are discovered and installed together.
+
+### Repository structure
+
+```
+your-skill-repo/
+  ├── servers.json              # Optional: standalone MCP server definitions
+  ├── beacon/
+  │   ├── SKILL.md              # Skill definition (YAML frontmatter + instructions)
+  │   └── mcp_server.py         # Co-located MCP server (auto-discovered)
+  ├── code-graph/
+  │   ├── SKILL.md
+  │   └── mcp_server.py
+  └── expert-panel/
+      └── SKILL.md              # Skills without servers work too
+```
+
+### Configure
+
+```toml
+# config.toml
+[skills]
+extra_dirs = ["/path/to/your-skill-repo"]
+```
+
+### Usage
+
+```python
+# Install one skill + its MCP server
+install_from_repo(name="beacon")
+
+# Install a full stack at once
+batch_install_from_repo(names=["beacon", "code-graph", "expert-panel"])
+
+# Search by intent
+search_repo(intent="code review")
+```
+
+### How it works
+
+When you call `install_from_repo("code-graph")`:
+
+1. Locates `code-graph/SKILL.md` in the repo
+2. Copies the skill to `.claude/skills/code-graph/`
+3. Detects the co-located `mcp_server.py`
+4. Infers the run command and writes it to `.mcp.json`
+5. The skill and server are ready to use immediately
+
+---
+
 ## Extending the Registry
 
-Meta MCP discovers servers from online registries (Official MCP Registry, Smithery, mcp.so) **and** from local directories you configure.
+Meta MCP discovers servers from online registries **and** from local directories you configure.
 
 ### Adding a local server catalog
 
-1. Set `registry.extra_dirs` in your config file (or `META_MCP_REGISTRY_DIRS` env var) to include your directory.
+Set `registry.extra_dirs` in your config file, then place server definitions in any of these formats:
 
-2. Place server definitions in that directory using any of these formats:
-
-**Option A — `.mcp.json` or `servers.json` (mcpServers format):**
+**mcpServers format** (`.mcp.json` or `servers.json`):
 ```json
 {
   "mcpServers": {
@@ -221,7 +379,7 @@ Meta MCP discovers servers from online registries (Official MCP Registry, Smithe
 }
 ```
 
-**Option B — Standalone per-server JSON files (`my-server.json`):**
+**Standalone per-server** (`my-server.json`):
 ```json
 {
   "name": "my-server",
@@ -231,126 +389,29 @@ Meta MCP discovers servers from online registries (Official MCP Registry, Smithe
 }
 ```
 
-3. Run `search_mcp_servers` — your servers will appear in results.
-
 ### Auto-detect install
 
 When `install_mcp_server` is called for a server with no predefined recipe:
 
-1. **Repository auto-detect** — if the server has a `repository_url`, meta-mcp checks the GitHub repo for `pyproject.toml` or `package.json` to infer `uvx` or `npx` commands.
-2. **AI fallback** — searches npm, PyPI, and GitHub for matching packages.
-3. **Ask the user** — if nothing works, returns a message asking for the manual install command.
+1. **Repository auto-detect** — checks the GitHub repo for `pyproject.toml` or `package.json` to infer `uvx` or `npx` commands
+2. **AI fallback** — searches npm, PyPI, and GitHub for matching packages
+3. **Ask the user** — if nothing works, prompts for the manual install command
 
-## Skill Repository Self-Installation
-
-Meta-MCP can install skills **and their associated MCP servers** directly from a local skill repository — like your `D:/Home/claudeSkills/repo`. This is the most efficient way to bootstrap a development environment.
-
-### How it works
-
-Your skill repository is a directory containing skill folders:
-
-```
-D:/Home/claudeSkills/repo/
-├── servers.json          # Optional MCP server definitions
-├── beacon/
-│   ├── SKILL.md          # Skill definition
-│   └── mcp_server.py     # Co-located MCP server
-├── code-graph/
-│   ├── SKILL.md
-│   └── mcp_server.py
-└── ...
-```
-
-Meta-MCP automatically discovers all skills and co-located MCP servers, then installs them in one call.
-
-### Configure your repo
-
-```toml
-# ~/.config/meta-mcp/config.toml
-[skills]
-extra_dirs = ["D:/Home/claudeSkills/repo"]
-```
-
-Or via environment variable:
-```bash
-export META_MCP_SKILLS_DIRS="D:/Home/claudeSkills/repo"
-```
-
-### Available tools
-
-| Tool | Description |
-|------|-------------|
-| `list_repo_skills` | List all skills in the repository |
-| `search_repo` | Search skills + servers by intent |
-| `install_from_repo` | Install a skill (+ its MCP server) |
-| `batch_install_from_repo` | Install multiple skills at once |
-| `list_repo_servers` | List MCP servers defined in the repo |
-| `add_skill_repo` | Add a new repository |
-| `repo_catalog` | Full catalog of all repos, skills, servers |
-
-### Quick start
-
-```python
-# Install a single skill + its MCP server
-install_from_repo(name="beacon")
-
-# Install a complete stack
-batch_install_from_repo(names=["beacon", "code-graph", "expert-panel"])
-
-# Search for what you need
-search_repo(intent="code review")
-```
-
-### How installation works
-
-When you call `install_from_repo("code-graph")`:
-
-1. Copies `D:/Home/claudeSkills/repo/code-graph/SKILL.md` → `.claude/skills/code-graph/SKILL.md`
-2. Copies all skill assets (scripts, templates, etc.)
-3. Detects `mcp_server.py` in the skill directory
-4. Infers the command: `py D:/Home/claudeSkills/repo/code-graph/mcp_server.py`
-5. Writes the MCP server config to `.mcp.json`
-
-### servers.json format
-
-For servers without a co-located `mcp_server.py`, add entries to `servers.json`:
-
-```json
-{
-  "mcpServers": {
-    "my-server": {
-      "description": "My MCP server",
-      "install_command": "uvx my-server",
-      "category": "coding",
-      "keywords": ["code", "analysis"]
-    }
-  }
-}
-```
+---
 
 ## Custom Skills
 
-Skills are reusable SKILL.md files that encode workflows, procedures, and domain knowledge for Claude Code.
+Skills are reusable SKILL.md files that encode workflows, procedures, and domain knowledge.
 
 ### Skill directories
 
 | Scope | Location | Notes |
 |-------|----------|-------|
 | Global | `~/.claude/skills/` | Available in all projects |
-| Project | `.claude/skills/` (relative to project root) | Project-specific |
-| Extra | Configured via `skills.extra_dirs` or `META_MCP_SKILLS_DIRS` | Additional directories |
+| Project | `.claude/skills/` | Project-specific |
+| Extra | Configured via `skills.extra_dirs` | Additional repositories |
 
 ### SKILL.md format
-
-Each skill lives in its own directory with a `SKILL.md` file:
-
-```
-my-skill/
-  SKILL.md
-  helper-script.py   # optional supporting files
-```
-
-The `SKILL.md` uses YAML frontmatter:
 
 ```markdown
 ---
@@ -373,45 +434,51 @@ required-servers:
 Instructions for Claude to follow when this skill is invoked...
 ```
 
-### Frontmatter fields
-
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | string | Skill identifier |
 | `description` | string | Human-readable description |
 | `version` | string | Semver version |
-| `disable-model-invocation` | bool | If true, skill won't be auto-invoked |
+| `disable-model-invocation` | bool | If `true`, skill won't be auto-invoked |
 | `allowed-tools` | list | Tools this skill may use |
 | `tags` | list | Searchable tags |
 | `required-servers` | list | MCP servers this skill depends on |
+
+---
 
 ## Architecture
 
 ```
 src/meta_mcp/
-  server.py        # FastMCP server — registers all 41 tools
-  tools.py         # Tool implementations (Tool.apply() -> str)
-  tools_base.py    # Base class with auto-naming and schema extraction
-  settings.py      # Central config file reader (~/.config/meta-mcp/config.toml)
-  installer.py     # Install/uninstall with fallback chains + AI fallback
-  config.py        # Per-client config read/write/validate
-  clients.py       # Multi-client detection, drift sync (R6)
-  discovery.py     # Server discovery and search
-  intent.py        # Intent-based capability resolution (R1)
-  verification.py  # Post-install smoke testing (R3)
-  project.py       # Project context analysis (R4)
-  registry.py      # Federated registry search (R5)
-  memory.py        # Installation history and preferences (R7)
-  orchestration.py # Live server management (R8)
-  skills.py        # Agent Skills management (R9)
-  skill_repo.py    # Skill repository discovery & installation (R9 extension)
-  capability_stack.py # 4-layer capability audit (R10)
-  project_init.py  # One-call project bootstrap
-  models.py        # All Pydantic models
-  cli.py           # Click CLI entry point
+  ├── server.py            FastMCP server entry point
+  ├── tools.py             39 tool implementations (Tool.apply() -> str)
+  ├── tools_base.py        Base class with auto-naming and schema extraction
+  │
+  ├── _parsing.py          Shared SKILL.md parsing and name normalisation
+  ├── models.py            Pydantic models
+  ├── settings.py          Config file reader (TOML + env overrides)
+  ├── cli.py               Click CLI entry point
+  │
+  ├── discovery.py         Server discovery and search
+  ├── installer.py         Install / uninstall with fallback chains
+  ├── config.py            Per-client config read / write / validate
+  ├── intent.py            Intent-based capability resolution
+  ├── verification.py      Post-install health checking
+  ├── project.py           Project context analysis
+  ├── registry.py          Federated registry search
+  ├── memory.py            Installation history and preferences
+  │
+  ├── orchestration.py     Live server start / stop / restart
+  ├── clients.py           Multi-client detection and drift sync
+  ├── skills.py            Agent Skills management
+  ├── skill_repo.py        Skill repository discovery and installation
+  ├── capability_stack.py  4-layer capability audit
+  └── project_init.py      One-call project bootstrap
 ```
 
-Tools use `apply() -> str` — FastMCP handles MCP protocol wrapping.
+Tools implement `apply() -> str`. FastMCP handles MCP protocol wrapping.
+
+---
 
 ## Development
 
@@ -431,9 +498,11 @@ mypy src/
 
 ## Requirements
 
-- Python 3.10+
-- Dependencies: `mcp`, `httpx`, `click`, `pydantic`, `aiohttp`, `GitPython`, `PyYAML`, `jinja2`
+- **Python 3.10+**
+- **Dependencies:** `mcp`, `httpx`, `click`, `pydantic`, `aiohttp`, `GitPython`, `PyYAML`, `jinja2`
 
-## License
+---
 
-MIT
+<p align="center">
+  <sub>MIT License &bull; Built with <a href="https://modelcontextprotocol.io">Model Context Protocol</a></sub>
+</p>

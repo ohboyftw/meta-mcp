@@ -48,7 +48,9 @@ Usage::
 
 import json
 import logging
+import platform
 import shutil
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -61,6 +63,12 @@ from .models import (
     MCPServerWithOptions,
     SkillScope,
 )
+from ._parsing import (
+    FRONTMATTER_DELIMITER,
+    coerce_list,
+    normalise_name,
+    parse_skill_md,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +76,6 @@ logger = logging.getLogger(__name__)
 
 GLOBAL_SKILLS_DIR = Path.home() / ".claude" / "skills"
 PROJECT_SKILLS_DIR_NAME = ".claude/skills"
-FRONTMATTER_DELIMITER = "---"
 
 # File names that indicate an MCP server definition
 _SERVERS_FILENAMES = frozenset({"servers.json", "mcpServers.json", "mcp_servers.json"})
@@ -77,49 +84,22 @@ _SERVERS_FILENAMES = frozenset({"servers.json", "mcpServers.json", "mcp_servers.
 # ─── Data Models ──────────────────────────────────────────────────────────────
 
 
+@dataclass
 class RepoSkillInfo:
     """Metadata for a skill discovered inside a repository."""
 
-    name: str
-    description: str
-    repo_path: Path  # Path to the repo root
-    skill_dir: Path  # Path to the skill directory
-    skill_file: Path  # Path to SKILL.md
-    has_mcp_server: bool  # Whether mcp_server.py exists
-    mcp_server_file: Optional[Path]  # Path to mcp_server.py
-    mcp_command: Optional[str]  # Inferred command to run server
-    mcp_args: Optional[List[str]]  # Inferred args
-    tags: List[str]
-    required_servers: List[str]
-    source: str
-
-    def __init__(
-        self,
-        name: str = "",
-        description: str = "",
-        repo_path: Optional[Path] = None,
-        skill_dir: Optional[Path] = None,
-        skill_file: Optional[Path] = None,
-        has_mcp_server: bool = False,
-        mcp_server_file: Optional[Path] = None,
-        mcp_command: Optional[str] = None,
-        mcp_args: Optional[List[str]] = None,
-        tags: Optional[List[str]] = None,
-        required_servers: Optional[List[str]] = None,
-        source: str = "",
-    ):
-        self.name = name
-        self.description = description
-        self.repo_path = repo_path or Path()
-        self.skill_dir = skill_dir or Path()
-        self.skill_file = skill_file or Path()
-        self.has_mcp_server = has_mcp_server
-        self.mcp_server_file = mcp_server_file
-        self.mcp_command = mcp_command
-        self.mcp_args = mcp_args or []
-        self.tags = tags or []
-        self.required_servers = required_servers or []
-        self.source = source
+    name: str = ""
+    description: str = ""
+    repo_path: Path = field(default_factory=Path)
+    skill_dir: Path = field(default_factory=Path)
+    skill_file: Path = field(default_factory=Path)
+    has_mcp_server: bool = False
+    mcp_server_file: Optional[Path] = None
+    mcp_command: Optional[str] = None
+    mcp_args: List[str] = field(default_factory=list)
+    tags: List[str] = field(default_factory=list)
+    required_servers: List[str] = field(default_factory=list)
+    source: str = ""
 
     @property
     def install_source(self) -> str:
@@ -127,49 +107,26 @@ class RepoSkillInfo:
         return str(self.skill_dir)
 
 
+@dataclass
 class RepoServerInfo:
     """An MCP server definition parsed from servers.json in a repo."""
 
-    name: str
-    display_name: str
-    description: str
-    category: MCPServerCategory
-    repository_url: Optional[str]
-    keywords: List[str]
-    install_command: Optional[str]
-    command: Optional[str]
-    args: List[str]
-    env_vars: List[str]
-    skill_name: Optional[str]  # Associated skill name if co-located
-    repo_path: Path
+    name: str = ""
+    display_name: str = ""
+    description: str = ""
+    category: MCPServerCategory = MCPServerCategory.OTHER
+    repository_url: Optional[str] = None
+    keywords: List[str] = field(default_factory=list)
+    install_command: Optional[str] = None
+    command: Optional[str] = None
+    args: List[str] = field(default_factory=list)
+    env_vars: List[str] = field(default_factory=list)
+    skill_name: Optional[str] = None
+    repo_path: Path = field(default_factory=Path)
 
-    def __init__(
-        self,
-        name: str = "",
-        display_name: str = "",
-        description: str = "",
-        category: Optional[MCPServerCategory] = None,
-        repository_url: Optional[str] = None,
-        keywords: Optional[List[str]] = None,
-        install_command: Optional[str] = None,
-        command: Optional[str] = None,
-        args: Optional[List[str]] = None,
-        env_vars: Optional[List[str]] = None,
-        skill_name: Optional[str] = None,
-        repo_path: Optional[Path] = None,
-    ):
-        self.name = name
-        self.display_name = display_name or name.replace("-", " ").replace("_", " ").title()
-        self.description = description
-        self.category = category or MCPServerCategory.OTHER
-        self.repository_url = repository_url
-        self.keywords = keywords or []
-        self.install_command = install_command
-        self.command = command
-        self.args = args or []
-        self.env_vars = env_vars or []
-        self.skill_name = skill_name
-        self.repo_path = repo_path or Path()
+    def __post_init__(self):
+        if not self.display_name:
+            self.display_name = self.name.replace("-", " ").replace("_", " ").title()
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any], repo_path: Path) -> "RepoServerInfo":
@@ -332,7 +289,7 @@ class RepoIndex:
             if not skill_file.is_file():
                 continue
 
-            data = _parse_skill_md(skill_file)
+            data = parse_skill_md(skill_file)
             if data is None:
                 continue
 
@@ -347,9 +304,9 @@ class RepoIndex:
                 has_mcp_server=has_mcp,
                 mcp_server_file=child / "mcp_server.py" if has_mcp else None,
                 mcp_command=None,
-                mcp_args=None,
-                tags=_coerce_list(data.get("tags", [])),
-                required_servers=_coerce_list(data.get("required-servers", [])),
+                mcp_args=[],
+                tags=coerce_list(data.get("tags", [])),
+                required_servers=coerce_list(data.get("required-servers", [])),
                 source=f"repo:{self.repo_name}",
             )
 
@@ -380,7 +337,6 @@ class RepoIndex:
     def _discover_colocated_servers(self) -> None:
         """For skills that have mcp_server.py but no servers.json entry,
         create a RepoServerInfo from the skill's metadata."""
-        skill_names = {s.name for s in self.skills}
         server_names = {s.name for s in self.servers}
 
         for skill in self.skills:
@@ -407,70 +363,26 @@ class RepoIndex:
 
     def get_skill(self, name: str) -> Optional[RepoSkillInfo]:
         """Find a skill by name (fuzzy match on normalised name)."""
-        norm = _normalise_name(name)
+        norm = normalise_name(name)
         for s in self.skills:
-            if _normalise_name(s.name) == norm:
+            if normalise_name(s.name) == norm:
                 return s
         # Fallback: substring
         for s in self.skills:
-            if norm in _normalise_name(s.name) or _normalise_name(s.name) in norm:
+            if norm in normalise_name(s.name) or normalise_name(s.name) in norm:
                 return s
         return None
 
     def get_server(self, name: str) -> Optional[RepoServerInfo]:
         """Find a server definition by name."""
-        norm = _normalise_name(name)
+        norm = normalise_name(name)
         for s in self.servers:
-            if _normalise_name(s.name) == norm:
+            if normalise_name(s.name) == norm:
                 return s
         return None
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
-
-FRONTMATTER_DELIMITER = "---"
-
-
-def _parse_skill_md(path: Path) -> Optional[Dict[str, Any]]:
-    """Parse a SKILL.md file, returning frontmatter dict and body text."""
-    try:
-        content = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        logger.warning("Cannot read skill file %s: %s", path, exc)
-        return None
-
-    frontmatter: Dict[str, Any] = {}
-    stripped = content.strip()
-    if stripped.startswith(FRONTMATTER_DELIMITER):
-        parts = stripped.split(FRONTMATTER_DELIMITER, 2)
-        if len(parts) >= 3:
-            try:
-                frontmatter = yaml.safe_load(parts[1]) or {}
-            except yaml.YAMLError as exc:
-                logger.warning("Invalid YAML frontmatter in %s: %s", path, exc)
-            frontmatter["_body"] = parts[2].strip()
-
-    frontmatter.setdefault("_body", content)
-    frontmatter["_path"] = str(path.resolve())
-    return frontmatter
-
-
-def _coerce_list(value: Any) -> List[str]:
-    if isinstance(value, list):
-        return [str(v).strip() for v in value if v]
-    if isinstance(value, str):
-        return [item.strip() for item in value.split(",") if item.strip()]
-    return []
-
-
-def _normalise_name(name: str) -> str:
-    """Normalise a skill/server name to a consistent form."""
-    import re
-
-    # Strip common prefixes
-    basename = name.rsplit("/", 1)[-1] if "/" in name else name
-    safe = re.sub(r"[^a-zA-Z0-9_-]", "-", basename)
-    return re.sub(r"-+", "-", safe).strip("-").lower()
 
 
 def _infer_mcp_command(skill_dir: Path, skill_name: str) -> tuple:
@@ -478,8 +390,6 @@ def _infer_mcp_command(skill_dir: Path, skill_name: str) -> tuple:
 
     Returns (command, args) tuple.
     """
-    import platform
-
     server_file = skill_dir / "mcp_server.py"
     if not server_file.is_file():
         return None, []
@@ -638,24 +548,17 @@ class SkillRepoManager:
 
     # ─── Installation ─────────────────────────────────────────────────────
 
-    def install_skill(
+    def _do_install_skill(
         self,
         name: str,
         scope: SkillScope = SkillScope.PROJECT,
         install_server: bool = True,
-    ) -> str:
-        """Install a skill from a registered repo.
-
-        If ``install_server=True`` and the skill has a co-located MCP server,
-        the server is also installed.
-
-        Returns a human-readable status message.
-        """
+    ) -> tuple[bool, str]:
+        """Internal install returning (success, message)."""
         skill = self.get_skill(name)
         if skill is None:
-            return f"Skill '{name}' not found in any registered repository."
+            return False, f"Skill '{name}' not found in any registered repository."
 
-        # Install the SKILL.md into the target scope
         try:
             from .skills import SkillsManager
 
@@ -667,16 +570,25 @@ class SkillRepoManager:
             )
         except Exception as exc:
             logger.error("Failed to install skill %s: %s", name, exc)
-            return f"Failed to install skill '{name}': {exc}"
+            return False, f"Failed to install skill '{name}': {exc}"
 
         messages = [f"Installed skill '{skill.name}' from {skill.repo_path}"]
 
-        # Optionally install the co-located MCP server
         if install_server and skill.has_mcp_server:
             server_msg = self._install_mcp_server_for_skill(skill)
             messages.append(server_msg)
 
-        return "\n".join(messages)
+        return True, "\n".join(messages)
+
+    def install_skill(
+        self,
+        name: str,
+        scope: SkillScope = SkillScope.PROJECT,
+        install_server: bool = True,
+    ) -> str:
+        """Install a skill from a registered repo. Returns human-readable status."""
+        _ok, msg = self._do_install_skill(name, scope=scope, install_server=install_server)
+        return msg
 
     def _install_mcp_server_for_skill(self, skill: RepoSkillInfo) -> str:
         """Install the MCP server co-located with a skill."""
@@ -698,10 +610,9 @@ class SkillRepoManager:
         )
 
         try:
-            # Sync loop -> run_sync
-            import asyncio
+            from .tools import run_async_safely
 
-            result = asyncio.run(installer.install_server(request))
+            result = run_async_safely(installer.install_server(request))
             if result.success:
                 return f"Installed MCP server '{skill.name}' (command: {skill.mcp_command})"
             else:
@@ -733,9 +644,9 @@ class SkillRepoManager:
         )
 
         try:
-            import asyncio
+            from .tools import run_async_safely
 
-            result = asyncio.run(installer.install_server(request))
+            result = run_async_safely(installer.install_server(request))
             if result.success:
                 return f"Installed server '{server.name}': {result.message}"
             else:
@@ -758,15 +669,13 @@ class SkillRepoManager:
         failed: List[str] = []
 
         for name in names:
-            msg = self.install_skill(name, scope=scope, install_server=install_servers)
-            if "not found" in msg.lower():
-                failed.append(name)
-            elif "Failed" in msg or "error" in msg.lower():
-                failed.append(name)
-                results.append(f"[FAIL] {name}: {msg}")
-            else:
+            ok, msg = self._do_install_skill(name, scope=scope, install_server=install_servers)
+            if ok:
                 succeeded.append(name)
                 results.append(f"[OK] {name}")
+            else:
+                failed.append(name)
+                results.append(f"[FAIL] {name}: {msg}")
 
         lines = [
             f"# Batch Install Results ({len(succeeded)}/{len(names)} succeeded)",
@@ -775,7 +684,7 @@ class SkillRepoManager:
         lines.extend(results)
         if failed:
             lines.append("")
-            lines.append(f"**Not found:** {', '.join(failed)}")
+            lines.append(f"**Failed:** {', '.join(failed)}")
             lines.append("Tip: Use `search_repo` to find available skills and servers.")
 
         return "\n".join(lines)
