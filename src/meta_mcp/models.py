@@ -37,14 +37,6 @@ class MCPServerStatus(str, Enum):
     UNKNOWN = "unknown"
 
 
-class CapabilityLayer(str, Enum):
-    """R10: Layers in the capability stack."""
-    TOOLS = "tools"
-    PROMPTS = "prompts"
-    SKILLS = "skills"
-    CONTEXT = "context"
-
-
 class TrustLevel(str, Enum):
     OFFICIAL = "official"
     VERIFIED = "verified"
@@ -87,14 +79,6 @@ class HealthStatus(str, Enum):
     UNHEALTHY = "unhealthy"
     DEGRADED = "degraded"
     UNKNOWN = "unknown"
-
-
-class WorkflowStepStatus(str, Enum):
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    SKIPPED = "skipped"
 
 
 # ─── Core Server Models ──────────────────────────────────────────────────────
@@ -189,37 +173,6 @@ class MCPServerHealth(BaseModel):
     response_time_ms: Optional[int] = Field(None, description="Response time in milliseconds")
     error_message: Optional[str] = Field(None, description="Error message if unhealthy")
     last_checked: datetime = Field(default_factory=datetime.now, description="Last health check time")
-
-
-# ─── R1: Intent-Based Resolution Models ──────────────────────────────────────
-
-class MissingCapability(BaseModel):
-    capability: str = Field(description="Name of the missing capability")
-    reason: str = Field(description="Why this capability is needed")
-    servers: List[str] = Field(description="Servers that provide this capability")
-    priority: str = Field("medium", description="Priority: high, medium, low")
-
-
-class CapabilityGapResult(BaseModel):
-    task_description: str = Field(description="Original task description")
-    missing_capabilities: List[MissingCapability] = Field(description="Identified gaps")
-    suggested_workflow: str = Field(description="Suggested workflow to fill gaps")
-    currently_available: List[str] = Field(default_factory=list, description="Currently available capabilities")
-
-
-class WorkflowStep(BaseModel):
-    order: int = Field(description="Step order")
-    server: str = Field(description="Server name")
-    role: str = Field(description="Role in the workflow")
-    required: bool = Field(True, description="Whether step is required")
-
-
-class WorkflowSuggestion(BaseModel):
-    workflow_name: str = Field(description="Name of the workflow")
-    description: str = Field(description="Workflow description")
-    steps: List[WorkflowStep] = Field(description="Ordered workflow steps")
-    required_credentials: List[str] = Field(default_factory=list, description="Required credentials")
-    estimated_setup_time: str = Field(description="Estimated setup time")
 
 
 # ─── R2: Conversational Config Models ────────────────────────────────────────
@@ -422,23 +375,6 @@ class ServerToolsResult(BaseModel):
     resources: List[Dict[str, Any]] = Field(default_factory=list, description="Discovered resources")
 
 
-class WorkflowExecutionStep(BaseModel):
-    server: str = Field(description="Server name")
-    tool: str = Field(description="Tool name")
-    input: Dict[str, Any] = Field(description="Tool input")
-    output: Optional[Any] = Field(None, description="Tool output")
-    status: WorkflowStepStatus = Field(WorkflowStepStatus.PENDING)
-    error: Optional[str] = None
-    latency_ms: Optional[int] = None
-
-
-class WorkflowExecutionResult(BaseModel):
-    workflow_name: str = Field(description="Workflow name")
-    steps: List[WorkflowExecutionStep] = Field(description="Execution steps")
-    overall_status: str = Field(description="completed, partial, failed")
-    total_time_ms: int = Field(description="Total execution time")
-
-
 # ─── R9: Skills Models ───────────────────────────────────────────────────────
 
 class AgentSkill(BaseModel):
@@ -495,37 +431,6 @@ class GeneratedSkill(BaseModel):
     path: str = Field(description="Path where SKILL.md was created")
     workflow_steps: List[str] = Field(description="Workflow steps encoded")
     required_servers: List[str] = Field(description="Required MCP servers")
-
-
-# ─── R10: Capability Stack Models ────────────────────────────────────────────
-
-class CapabilityGap(BaseModel):
-    layer: CapabilityLayer = Field(description="Which layer has the gap")
-    gap: str = Field(description="Description of the gap")
-    fix: str = Field(description="How to fix it")
-    priority: str = Field("medium", description="Priority")
-
-
-class CapabilityStackReport(BaseModel):
-    tools_layer: Dict[str, Any] = Field(description="MCP server status")
-    prompts_layer: Dict[str, Any] = Field(description="MCP prompt status")
-    skills_layer: Dict[str, Any] = Field(description="Agent skills status")
-    context_layer: Dict[str, Any] = Field(description="Project context status")
-    gaps: List[CapabilityGap] = Field(default_factory=list, description="Identified gaps")
-    score: int = Field(description="Overall capability score 0-100")
-
-
-class CapabilityBundleItem(BaseModel):
-    item_type: str = Field(description="mcp_server, skill, prompt")
-    name: str = Field(description="Item name")
-    status: str = Field("pending", description="Installation status")
-    message: Optional[str] = None
-
-
-class CapabilityBundleResult(BaseModel):
-    items: List[CapabilityBundleItem] = Field(description="Bundle items")
-    overall_status: str = Field(description="Status of bundle install")
-    summary: str = Field(description="Summary message")
 
 
 # ─── AI Fallback Models ───────────────────────────────────────────────────────
