@@ -1,0 +1,7 @@
+name: default
+description: Minimal setup — registers meta-mcp only
+skills: []
+servers: []
+env_required: []
+post_install:
+  - "Add profiles to your skill repo under profiles/*.yaml"
