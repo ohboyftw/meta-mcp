@@ -10,16 +10,28 @@ a project. They are discovered in order:
 
 import platform
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import yaml
 from pydantic import BaseModel
 
 
 class ProfileServerEntry(BaseModel):
-    """A server entry within a profile."""
+    """A server entry within a profile.
+
+    Minimal profiles only need ``name`` + ``auto_install``.  Richer profiles
+    can embed the full server definition so that ``project_init`` can write
+    it to ``.mcp.json`` without a separate registry lookup.
+    """
     name: str
     auto_install: bool = False
+    # Optional server definition fields (used when present)
+    command: str = ""
+    args: List[str] = []
+    env_vars: Dict[str, str] = {}
+    required_env_from_os: List[str] = []
+    description: str = ""
+    category: str = "knowledge"
 
 
 class ProfileConfig(BaseModel):

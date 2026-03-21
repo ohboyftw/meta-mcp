@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .models import ProjectInitResult, ProjectServerDefinition, ProjectValidateResult
-from .profiles import load_profile, list_profiles, ProfileNotFoundError
+from .profiles import load_profile, list_profiles, ProfileNotFoundError, ProfileServerEntry
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +35,39 @@ def _get_skills_repo() -> str:
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def _resolve_template(value: str, context: Dict[str, str]) -> str:
-    """Resolve {template} variables in a string using str.format_map."""
-    try:
-        return value.format_map(context)
-    except KeyError:
-        return value
+class _WarnOnMissing(dict):
+    """Dict subclass that tracks missing keys during str.format_map()."""
+
+    def __init__(self, data: Dict[str, str]) -> None:
+        super().__init__(data)
+        self.missing: List[str] = []
+
+    def __missing__(self, key: str) -> str:
+        self.missing.append(key)
+        return "{" + key + "}"
+
+
+def _resolve_template(
+    value: str,
+    context: Dict[str, str],
+    *,
+    warn_missing: bool = True,
+) -> str:
+    """Resolve {template} variables in a string.
+
+    Unresolved placeholders are preserved as-is, but a warning is logged
+    for each missing key so that typos / misconfigured profiles surface
+    immediately instead of producing silently broken configs.
+    """
+    proxy = _WarnOnMissing(context)
+    result = value.format_map(proxy)
+    if warn_missing and proxy.missing:
+        logger.warning(
+            "Unresolved template variable(s) %s in value %r",
+            proxy.missing,
+            value,
+        )
+    return result
 
 
 def _ensure_settings_flag(project_root: Path) -> bool:
@@ -99,11 +126,11 @@ class ProjectInitializer:
             if missing:
                 result.missing_env_vars["_profile"] = missing
 
-        # Determine server list
-        if servers:
-            server_names = servers
-        else:
-            server_names = self._resolve_server_list(profile_name)
+        # Determine server definitions
+        server_defs = self._resolve_server_definitions(
+            profile_name=profile_name,
+            explicit_names=servers,
+        )
 
         # Load existing .mcp.json (merge, don't overwrite)
         mcp_json_path = root / ".mcp.json"
@@ -117,13 +144,28 @@ class ProjectInitializer:
         existing_servers = existing_config.get("mcpServers", {})
         result.pre_existing_servers = list(existing_servers.keys())
 
+        # Template context for variable resolution
+        context: Dict[str, str] = {
+            "project_root": str(root),
+            "skills_repo": _get_skills_repo(),
+        }
+
         # Process each server
         new_servers: Dict = {}
-        for name in server_names:
+        for name, defn in server_defs.items():
             if name in existing_servers:
                 result.servers_skipped.append(name)
                 continue
 
+            if not defn.command:
+                result.warnings.append(
+                    f"Server '{name}' has no command defined — skipped. "
+                    "Add command/args to the profile or use install_mcp_server instead."
+                )
+                continue
+
+            entry = self._build_server_entry(defn, context, validate_env, result)
+            new_servers[name] = entry
             result.servers_configured.append(name)
 
         if not dry_run:
@@ -203,16 +245,64 @@ class ProjectInitializer:
 
     # ─── Internal helpers ─────────────────────────────────────────────────
 
-    def _resolve_server_list(self, profile: Optional[str] = None) -> List[str]:
-        """Resolve which servers to install from a profile name."""
-        if not profile:
-            profile = "default"
+    def _resolve_server_definitions(
+        self,
+        profile_name: Optional[str] = None,
+        explicit_names: Optional[List[str]] = None,
+    ) -> Dict[str, ProjectServerDefinition]:
+        """Resolve server definitions from profile and/or explicit names.
+
+        When ``explicit_names`` is provided, each name is looked up in the
+        loaded profile.  Profile entries that carry a ``command`` field are
+        converted to ``ProjectServerDefinition``; entries without one are
+        returned with an empty command (the caller decides how to handle it).
+
+        Returns:
+            Mapping of server name → definition.
+        """
+        profile_name = profile_name or "default"
         try:
-            config = load_profile(profile)
-            return [s.name for s in config.servers if s.auto_install]
+            profile_config = load_profile(profile_name)
         except ProfileNotFoundError:
-            logger.warning("Profile '%s' not found, using empty list", profile)
-            return []
+            logger.warning("Profile '%s' not found, using empty list", profile_name)
+            profile_config = None
+
+        # Build a lookup from profile entries
+        profile_entries: Dict[str, ProfileServerEntry] = {}
+        if profile_config:
+            for entry in profile_config.servers:
+                profile_entries[entry.name] = entry
+
+        # Determine which servers we care about
+        if explicit_names:
+            names = explicit_names
+        elif profile_config:
+            names = [s.name for s in profile_config.servers if s.auto_install]
+        else:
+            names = []
+
+        result: Dict[str, ProjectServerDefinition] = {}
+        for name in names:
+            entry = profile_entries.get(name)
+            if entry and entry.command:
+                result[name] = ProjectServerDefinition(
+                    name=entry.name,
+                    description=entry.description or f"Server: {name}",
+                    command=entry.command,
+                    args=entry.args,
+                    env_vars=entry.env_vars,
+                    required_env_from_os=entry.required_env_from_os,
+                    category=entry.category,
+                )
+            else:
+                # No definition available — return a stub so the caller
+                # can warn or look up an installer catalog later.
+                result[name] = ProjectServerDefinition(
+                    name=name,
+                    description=f"Server: {name}",
+                    command="",
+                )
+        return result
 
     def _build_server_entry(
         self,
