@@ -273,6 +273,28 @@ post_install:
 - **Validation model:** Use a Pydantic `ProfileConfig` model for validation
   rather than raw dict, consistent with the rest of the codebase.
 
+### 6.8 Skill Integration: meta-mcp-repo Option 5
+
+The `meta-mcp-repo` skill (installed at `~/.claude/skills/`) presents an
+interactive menu including "Option 5: Configure MCP servers in .mcp.json".
+
+With the profile YAML system, option 5 should:
+
+1. Call `list_repo_skills` or scan `<skill_repo>/profiles/*.yaml` to discover
+   available profiles.
+2. Present profiles to the user (name + description).
+3. Call `project_init(profile="<chosen>")` which handles the full install +
+   config write flow.
+
+This makes the skill a thin interactive wrapper around the `project_init` tool.
+The skill handles UX (presenting choices), the tool handles execution (profile
+loading, installing, writing `.mcp.json`).
+
+**Skill update required:** The `meta-mcp-repo` SKILL.md in the skill repo
+should be updated to reference profile-based `project_init` instead of manual
+server-by-server config. This change lives in the skill repo, not in this
+package.
+
 ## 7. Files Changed
 
 ### 7.1 Deleted
