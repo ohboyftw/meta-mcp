@@ -24,7 +24,6 @@ import yaml
 from .models import (
     AgentSkill,
     CapabilitySearchResult,
-    GeneratedSkill,
     MCPPrompt,
     SkillListResult,
     SkillScope,
@@ -748,115 +747,6 @@ class SkillsManager:
 
         logger.info("update_skills: %d skills updated", len(updated))
         return updated
-
-    # ── Discover Prompts ──────────────────────────────────────────────────
-
-    async def discover_prompts(
-        self, servers_config: Dict[str, Any]
-    ) -> List[MCPPrompt]:
-        """Discover MCP prompts from configured servers.
-
-        Since actually connecting to running servers requires the orchestration
-        module, this method returns *known prompt patterns* for common server
-        names found in *servers_config*.
-        """
-        prompts: List[MCPPrompt] = []
-
-        for server_name in servers_config:
-            # Normalise the configured server name for lookup
-            normalised = server_name.lower().replace("_", "-").replace(" ", "-")
-            for known_name, known_prompts in _KNOWN_SERVER_PROMPTS.items():
-                if known_name in normalised:
-                    for prompt_data in known_prompts:
-                        prompts.append(
-                            MCPPrompt(
-                                name=prompt_data["name"],
-                                description=prompt_data["description"],
-                                arguments=prompt_data.get("arguments", []),
-                                server=server_name,
-                            )
-                        )
-                    break
-
-        logger.info(
-            "discover_prompts: found %d prompts for %d servers",
-            len(prompts),
-            len(servers_config),
-        )
-        return prompts
-
-    # ── Generate Workflow Skill ────────────────────────────────────────────
-
-    def generate_workflow_skill(
-        self,
-        name: str,
-        workflow_steps: List[Dict[str, str]],
-        project_path: Optional[str] = None,
-    ) -> GeneratedSkill:
-        """Generate a SKILL.md encoding *workflow_steps*.
-
-        Each step is expected to be a dict with keys ``server``, ``tool``,
-        and ``description``.  The generated SKILL.md is saved under the
-        project skills directory.
-
-        Returns a ``GeneratedSkill`` model.
-        """
-        target_dir = _resolve_project_skills_dir(project_path or self.project_path)
-        skill_dir = target_dir / self._normalise_name(name)
-        skill_dir.mkdir(parents=True, exist_ok=True)
-        skill_file = skill_dir / "SKILL.md"
-
-        # Collect required servers
-        required_servers: List[str] = list(
-            dict.fromkeys(step.get("server", "") for step in workflow_steps if step.get("server"))
-        )
-        allowed_tools: List[str] = list(
-            dict.fromkeys(step.get("tool", "") for step in workflow_steps if step.get("tool"))
-        )
-        step_descriptions: List[str] = []
-        for idx, step in enumerate(workflow_steps, 1):
-            desc = step.get("description", "")
-            server = step.get("server", "unknown")
-            tool = step.get("tool", "unknown")
-            step_descriptions.append(
-                f"{idx}. **[{server}:{tool}]** {desc}"
-            )
-
-        frontmatter = _generate_frontmatter(
-            name=name,
-            description=f"Auto-generated workflow skill with {len(workflow_steps)} steps",
-            allowed_tools=allowed_tools or ["Bash", "Read"],
-            tags=["workflow", "generated"],
-            required_servers=required_servers,
-        )
-
-        body_lines = [
-            f"# {name}",
-            "",
-            "This skill was auto-generated from a workflow definition.",
-            "",
-            "## Workflow Steps",
-            "",
-        ]
-        body_lines.extend(step_descriptions)
-        body_lines.append("")
-        body_lines.append("## Execution Notes")
-        body_lines.append("")
-        body_lines.append(
-            "Execute the steps in order. If a step fails, report the error "
-            "and skip to the next step unless it is marked as required."
-        )
-
-        content = f"{frontmatter}\n\n" + "\n".join(body_lines) + "\n"
-        skill_file.write_text(content, encoding="utf-8")
-
-        logger.info("Generated workflow skill %r at %s", name, skill_file)
-        return GeneratedSkill(
-            name=name,
-            path=str(skill_file.resolve()),
-            workflow_steps=[s.get("description", "") for s in workflow_steps],
-            required_servers=required_servers,
-        )
 
     # ── Trust Analysis ────────────────────────────────────────────────────
 
